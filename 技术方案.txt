@@ -1,0 +1,325 @@
+# PDFReader X 技术方案
+
+## 技术栈确认
+
+| 项目 | 选择 |
+|------|------|
+| 框架 | WPF (.NET 8) |
+| PDF引擎 | PDFium（PdfiumViewer.Updated fork + bblanchon.PDFium.Win32 原生库） |
+| LLM API | OpenAI 兼容格式 |
+| MVVM | CommunityToolkit.Mvvm |
+| 文件存储 | ZIP 包（.pdfrx），类似 .docx 的 Office Open XML 模式 |
+
+---
+
+## 文件存储方案：.pdfrx 包格式
+
+### 设计理念
+
+类似 `.docx` / `.one` — 本质上是一个 ZIP 压缩包，改扩展名为 `.pdfrx`。单文件便携，内部结构化存储。
+
+### 包内结构
+
+```
+document.pdfrx  (ZIP 压缩包，扩展名 .pdfrx)
+├── manifest.json         # 版本、创建时间、最后修改、原始PDF引用路径
+├── canvas.json           # 画布状态：缩放、偏移、页面排列模式
+├── bookmarks.json        # 书签数据（原始 + LLM生成 + 用户手动调整）
+├── pages/
+│   ├── page_001.json     # 该页上所有元素列表及其属性
+│   ├── page_002.json
+│   └── ...
+├── ink/
+│   ├── page_001.isf      # WPF原生 Ink Serialized Format 墨迹文件
+│   ├── page_002.isf
+│   └── ...
+├── images/
+│   ├── img_a1b2c3.png    # 用户导入的图片（保留原始格式）
+│   ├── img_d4e5f6.jpg
+│   └── ...
+└── pdf/
+    └── original.pdf      # 原始PDF副本（可配置：嵌入/仅引用路径）
+```
+
+### 各文件说明
+
+**manifest.json**
+```json
+{
+  "version": 1,
+  "createdAt": "2026-08-06T...",
+  "modifiedAt": "2026-08-06T...",
+  "pdfSource": "C:\\Users\\...\\document.pdf",  // 原始PDF路径
+  "pdfEmbedded": true                            // 是否把PDF复制进了包里
+}
+```
+
+**canvas.json**
+```json
+{
+  "zoom": 1.0,
+  "offsetX": 0,
+  "offsetY": 0,
+  "layout": "continuous-vertical"   // 页面排列：continuous-vertical | single-page | grid
+}
+```
+
+**pages/page_001.json** — 页面上所有元素的清单
+```json
+{
+  "pageIndex": 0,
+  "elements": [
+    {"id": "ink-main",      "type": "ink",     "file": "ink/page_001.isf", "zIndex": 2},
+    {"id": "img-abc123",    "type": "image",   "file": "images/img_a1b2c3.png",
+                           "x": 120, "y": 300, "width": 400, "height": 300, "zIndex": 1},
+    {"id": "text-box-1",    "type": "textbox", "x": 50, "y": 150, "width": 300, "height": 200,
+                           "text": "...", "fontFamily": "微软雅黑", "fontSize": 14, "zIndex": 0}
+  ]
+}
+```
+
+**ink/*.isf** — WPF `StrokeCollection` 原生序列化，保存/加载一条 API 搞定，包含压感、笔尖形状、时间戳等全部数据。
+
+### 为什么不选其他方案
+
+| 方案 | 问题 |
+|------|------|
+| 纯 JSON sidecar | 图片和墨迹二进制数据只能 base64，体积膨胀 33%，大文件读写慢 |
+| SQLite | 单文件且高效，但不直观，用户无法手动修复，外部工具不兼容 |
+| 目录散文件 | 用户复制一个文件漏掉目录就丢数据 |
+| **ZIP 包 (.pdfrx)** | 单文件便携，内部结构清晰，System.IO.Compression 原生支持，无额外依赖 |
+
+---
+
+## 核心架构：画布 > 文档
+
+### 架构图示
+
+```
+┌──────────────────────────────────────────────────┐
+│              InfiniteCanvas (自定义控件)           │
+│                                                  │
+│   ┌──────────────────────────────────────────┐   │
+│   │          InkCanvas (墨迹层)               │   │
+│   │   笔压感 | 橡皮擦 | 笔划选择 | 套索       │   │
+│   ├──────────────────────────────────────────┤   │
+│   │          Elements Layer (元素层)           │   │
+│   │   文本框 | 图片 | 形状 | ...              │   │
+│   ├──────────────────────────────────────────┤   │
+│   │          PDF Page Layer (页面背景层)       │   │
+│   │   ┌────────┐  ┌────────┐  ┌────────┐    │   │
+│   │   │ Page 1 │  │ Page 2 │  │ Page 3 │    │   │
+│   │   │ (位图) │  │ (位图) │  │ (位图) │    │   │
+│   │   └────────┘  └────────┘  └────────┘    │   │
+│   └──────────────────────────────────────────┘   │
+│                                                  │
+│   缩放/平移 → ManipulationProcessor → 三层的 Transform 同步  │
+└──────────────────────────────────────────────────┘
+```
+
+三层结构：
+1. **PDF 页面层**（最底）— PDFium 渲染的位图
+2. **元素层**（中间）— 文本框、图片、形状等
+3. **墨迹层**（最顶）— WPF InkCanvas，手写笔直接在这里，最低延迟
+
+缩放和平移时，三层统一应用同一个 Transform，保证始终对齐。
+
+### 画布交互模式
+
+| 输入 | 行为 |
+|------|------|
+| 手写笔尖 | 书写墨迹 |
+| 手写笔尾/橡皮按钮 | 擦除 |
+| 单指触摸 | 平移画布 |
+| 双指捏合 | 缩放 |
+| 鼠标滚轮 | 上下滚动 / Ctrl+滚轮缩放 |
+| 鼠标中键拖拽 | 平移 |
+| 鼠标左键 | 书写（可配置）/ 选择工具 |
+
+---
+
+## OneNote 风格功能清单
+
+### Canvas 元素类型
+
+| 元素 | 说明 | 优先级 |
+|------|------|--------|
+| **Ink** | 墨迹笔划（压感 + GPU渲染） | P1 |
+| **PdfPage** | PDF 页面位图（背景） | P1 |
+| **Image** | 导入的图片（剪贴板粘贴 / 文件插入 / 拖拽） | P2 |
+| **TextBox** | 自由文本框（点击任意位置开始输入） | P2 |
+| **Shape** | 矩形/圆形/直线/箭头 | P3 |
+
+### 工具面板
+
+| 工具 | 说明 | 优先级 |
+|------|------|--------|
+| **钢笔** | 多种颜色/粗细预设，压感 | P1 |
+| **荧光笔** | 半透明粗笔触 | P1 |
+| **橡皮擦** | 笔划级擦除 / 点擦除 | P1 |
+| **套索选择** | 圈选墨迹，移动/删除/改色 | P2 |
+| **矩形选择** | 选择图片/文本框等元素 | P2 |
+| **插入图片** | 从文件/剪贴板 | P2 |
+| **文本框** | 点击放置，自由编辑 | P2 |
+| **形状** | 矩形/椭圆/直线/箭头 | P3 |
+| **标尺** | 辅助画直线 | P3 |
+
+### 侧边栏
+
+| 面板 | 说明 |
+|------|------|
+| **页面缩略图** | 点击跳转、拖拽排序 |
+| **书签目录** | TreeView，点击跳转，支持编辑 |
+| **工具设置** | 笔颜色/粗细，文本框字体 |
+
+---
+
+## 工程结构
+
+```
+PDFReaderX.sln
+├── src/
+│   ├── PDFReaderX.App/          # WPF 主工程
+│   │   ├── Views/               # 窗口、用户控件
+│   │   ├── ViewModels/          # MVVM ViewModels
+│   │   ├── Controls/            # 自定义控件（InfiniteCanvas等）
+│   │   ├── Converters/          # 值转换器
+│   │   └── Resources/           # 样式、图标、笔刷
+│   ├── PDFReaderX.Core/         # 核心库
+│   │   ├── Models/              # 数据模型（Page, Element, Bookmark, Canvas）
+│   │   ├── Services/            # 业务逻辑
+│   │   │   ├── PdfRenderService     # PDF渲染（PDFium封装）
+│   │   │   ├── DocumentService      # 文档生命周期
+│   │   │   ├── BookmarkService      # 书签提取/管理
+│   │   │   └── PackageService       # .pdfrx 包读写
+│   │   └── Serialization/       # JSON序列化辅助
+│   └── PDFReaderX.LLM/          # LLM集成
+│       ├── ILLMService.cs
+│       ├── OpenAICompatibleService.cs
+│       └── BookmarkPromptTemplate.cs
+└── tests/
+    └── PDFReaderX.Core.Tests/
+```
+
+### NuGet 依赖
+
+| 包 | 用途 |
+|----|------|
+| `PdfiumViewer.Updated` | PDF渲染（PdfiumViewer 的 .NET Core 维护分支） |
+| `bblanchon.PDFium.Win32` | PDFium 原生库（win-x64/x86/arm64，NuGet 自动分发） |
+| `CommunityToolkit.Mvvm` | MVVM 源生成器 |
+| `Microsoft.Xaml.Behaviors.Wpf` | 行为绑定 |
+| `System.IO.Compression` | ZIP包读写（.NET 内置） |
+
+---
+
+## 实现阶段
+
+### Phase 1：骨架 + PDF加载
+- 创建解决方案 + 3个项目 + NuGet包
+- WPF 主窗口布局（侧边栏 + 画布区域 + 工具栏）
+- MVVM 基础设施（ViewModel 基类、命令）
+- 文件打开对话框 → PDFium 加载 → 渲染第一页到位图 → 显示在画布上
+- PDF 页面垂直排列
+
+### Phase 2：画布交互 + 墨迹
+- InkCanvas 覆盖层集成
+- 缩放/平移（`ScaleTransform` + `TranslateTransform`），三层同步
+- 笔/荧光笔/橡皮擦模式切换
+- **压感**：`DrawingAttributes.IgnorePressure = false` + `StylusPointProperties.NormalPressure`
+- 手势区分：笔输入 → 墨迹，触摸 → 平移/缩放
+- PDF 页面按需渲染 + 缓存
+
+### Phase 3：侧边栏（缩略图 + 书签）
+- 页面缩略图列表（后台线程生成）
+- 书签面板：读取 PDF Outline → TreeView 展示 + 点击跳转
+- 画布页面之间的间距/边距调整
+
+### Phase 4：LLM 自动生成书签
+- LLM 设置界面（Endpoint、API Key、Model）
+- PDF 逐页文本提取管道
+- 提示词模板 → JSON 结构化输出解析
+- 生成结果预览 + 人工确认/编辑 + 保存到 .pdfrx
+
+### Phase 5：OneNote 元素
+- 图片导入（剪贴板粘贴 Ctrl+V、文件插入、拖拽到画布）
+- 自由文本框（点击画布空白处 → 输入文字，支持移动和缩放）
+- 元素选择器（点击选中图片/文本框，显示调整手柄）
+- 简单的撤销/重做
+
+### Phase 6：持久化 + 打磨
+- .pdfrx 包读写（ZIP 打包/解包，所有 JSON + 墨迹 ISF + 图片）
+- 打开 .pdfrx → 恢复完整画布状态
+- 套索选择（圈选墨迹）
+- 性能优化：大量笔划场景不卡顿
+- 导出：墨迹+元素导出为 PDF 注释 / 合并渲染为新的 PDF
+
+---
+
+## 核心技术点
+
+### 墨迹平滑（关键）
+
+WPF InkCanvas 默认就有一定平滑，但要达到 OneNote 级别需要：
+
+```csharp
+// 关闭默认平滑（它会引入轻微延迟），用自定义贝塞尔平滑代替
+var da = new DrawingAttributes {
+    FitToCurve = false,        // 关闭，减少延迟
+    IgnorePressure = false,    // 开启压感
+    Width = 2,
+    Height = 2,
+};
+// 在 StylusPoints 收集后，用 Chaikin 或 Catmull-Rom 算法后处理平滑
+```
+
+### InkCanvas + 触摸手势隔离
+
+```csharp
+// 关键：区分笔输入和触摸输入
+inkCanvas.PreviewStylusDown += (s, e) => {
+    // 笔输入 → InkCanvas 正常处理
+};
+inkCanvas.PreviewTouchDown += (s, e) => {
+    // 触摸输入 → 切换 InkCanvas EditingMode.None
+    // 改由我们自己处理平移手势
+    inkCanvas.EditingMode = InkCanvasEditingMode.None;
+};
+```
+
+### PDF 渲染管线
+
+```csharp
+// 按当前缩放级别动态决定渲染DPI
+int dpi = (int)(96 * currentZoom);
+var image = pdfDoc.Render(pageIndex, dpi, dpi, false);
+// 转 WriteableBitmap → 绑定到 Image.Source
+```
+
+### .pdfrx 包读写
+
+```csharp
+// 打开
+using var archive = ZipFile.OpenRead(path);
+var manifest = JsonSerializer.Deserialize<Manifest>(
+    archive.GetEntry("manifest.json").Open());
+var inkStrokes = new StrokeCollection(
+    archive.GetEntry("ink/page_001.isf").Open());
+
+// 保存
+using var archive = ZipFile.Open(path, ZipArchiveMode.Create);
+archive.CreateEntryFromAny("manifest.json", manifestStream);
+archive.CreateEntryFromAny("ink/page_001.isf", inkStream);
+```
+
+---
+
+## 验证方案
+
+1. 打开有书签的 PDF → 验证渲染质量 + 书签读取 + 点击跳转
+2. 手写笔书写 → 验证压感/延迟/平滑度
+3. 缩放/平移 → 验证墨迹与 PDF 页面同步移动
+4. 粘贴图片 / 插入文本框 → 验证元素层功能
+5. 配置 LLM API → 用无书签 PDF 测试自动生成
+6. 保存为 .pdfrx → 关闭 → 重新打开 → 验证所有内容恢复
+7. 长时间书写（1000+ 笔划）→ 验证不卡顿
