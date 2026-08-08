@@ -33,4 +33,35 @@ public class PdfRenderServiceTests
         var text = service.GetPageText(0);
         Assert.Contains("PDFReader X", text);
     }
+
+    [Fact]
+    public void GetOutline_ReturnsBookmarkTree()
+    {
+        using var service = PdfRenderService.Load(SamplePdfPath);
+        var outline = service.GetOutline();
+
+        Assert.Equal(3, outline.Count);
+        Assert.Equal("Page 1 - Introduction", outline[0].Title);
+        Assert.Equal(0, outline[0].PageIndex);
+        Assert.Equal("Page 2 - Bookmarks and Ink", outline[1].Title);
+        Assert.Equal(1, outline[1].PageIndex);
+
+        // 第三项带一个子书签
+        Assert.Equal("Page 3 - LLM Bookmarks", outline[2].Title);
+        Assert.Equal(2, outline[2].PageIndex);
+        var child = Assert.Single(outline[2].Children);
+        Assert.Equal("LLM Generation Test", child.Title);
+        Assert.Equal(2, child.PageIndex);
+    }
+
+    [Fact]
+    public void RenderThumbnail_ProducesBitmapNearTargetWidth()
+    {
+        using var service = PdfRenderService.Load(SamplePdfPath);
+        using var image = service.RenderThumbnail(0, 160);
+
+        Assert.NotNull(image);
+        Assert.InRange(image.Width, 150, 175);
+        Assert.InRange(image.Height, 195, 230);
+    }
 }

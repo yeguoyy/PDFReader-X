@@ -21,13 +21,57 @@ def _content(text: str, page_no: int) -> bytes:
     ).encode("ascii")
 
 
+def _add_outline(objects: list[bytes], page_obj: list[int]) -> None:
+    """在 objects 末尾追加 PDF 大纲（书签）对象，供侧边栏书签树测试。"""
+    entries: list[tuple[bytes, int, list[tuple[bytes, int]]]] = []
+    titles = [
+        b"Page 1 - Introduction",
+        b"Page 2 - Bookmarks and Ink",
+        b"Page 3 - LLM Bookmarks",
+    ]
+    for i in range(min(3, len(page_obj))):
+        kids = [(b"LLM Generation Test", i)] if i == 2 else []
+        entries.append((titles[i], i, kids))
+
+    root_id = len(objects)
+    total_count = sum(1 + len(kids) for _, _, kids in entries)
+    first_id = root_id + 1
+    last_id = first_id + len(entries) - 1
+    objects.append(
+        b"<< /Type /Outlines /First %d 0 R /Last %d 0 R /Count %d >>"
+        % (first_id, last_id, total_count)
+    )
+
+    next_child_id = last_id + 1
+    for i, (title, page_idx, kids) in enumerate(entries):
+        parent = b"/Parent %d 0 R" % root_id
+        if i > 0:
+            parent += b" /Prev %d 0 R" % (first_id + i - 1)
+        if i < len(entries) - 1:
+            parent += b" /Next %d 0 R" % (first_id + i + 1)
+        if kids:
+            parent += b" /First %d 0 R /Last %d 0 R /Count %d" % (
+                next_child_id, next_child_id + len(kids) - 1, len(kids)
+            )
+        objects.append(
+            b"<< /Title (%s) %s /Dest [%d 0 R /Fit] >>"
+            % (title, parent, page_obj[page_idx])
+        )
+        for kid_title, kid_page in kids:
+            objects.append(
+                b"<< /Title (%s) /Parent %d 0 R /Dest [%d 0 R /Fit] >>"
+                % (kid_title, first_id + i, page_obj[kid_page])
+            )
+        next_child_id += len(kids)
+
+
 def build_pdf(pages: list[str]) -> bytes:
     n = len(pages)
     content_obj = [4 + i * 2 for i in range(n)]
     page_obj = [5 + i * 2 for i in range(n)]
 
     objects: list[bytes] = [b""]
-    objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+    objects.append(b"<< /Type /Catalog /Pages 2 0 R /Outlines %d 0 R >>" % (4 + 2 * n))
     kids = b" ".join(b"%d 0 R" % p for p in page_obj)
     objects.append(b"<< /Type /Pages /Kids [%s] /Count %d >>" % (kids, n))
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
@@ -39,6 +83,7 @@ def build_pdf(pages: list[str]) -> bytes:
             b"/Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>"
             % (PAGE_W, PAGE_H, content_obj[i])
         )
+    _add_outline(objects, page_obj)
 
     out = bytearray(b"%PDF-1.4\n")
     offsets = [0]

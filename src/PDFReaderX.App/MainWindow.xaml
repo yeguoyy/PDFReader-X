@@ -77,6 +77,12 @@
             <TextBlock Text="{Binding Zoom, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="44"
                        Foreground="#FF444444"/>
             <Button Content="重置" Margin="4,2" Click="OnResetZoomClick"/>
+            <Separator/>
+            <TextBlock Text="页距:" VerticalAlignment="Center" Margin="4,0"/>
+            <Slider Width="80" Minimum="0" Maximum="80" VerticalAlignment="Center" Margin="2,0"
+                    Value="{Binding PageGap, Mode=TwoWay}" ToolTip="画布页面之间的间距"/>
+            <TextBlock Text="{Binding PageGap, StringFormat={}{0:0}px}" VerticalAlignment="Center"
+                       MinWidth="30" Margin="2,0"/>
         </ToolBar>
 
         <Grid Grid.Row="2">
@@ -87,12 +93,100 @@
 
             <TabControl Grid.Column="0" Margin="4,4,0,4">
                 <TabItem Header="缩略图">
-                    <TextBlock Text="缩略图面板（Phase 3）"
-                               VerticalAlignment="Center" HorizontalAlignment="Center" Foreground="Gray"/>
+                    <Grid>
+                        <ListBox x:Name="ThumbnailList"
+                                 ItemsSource="{Binding Thumbnails}"
+                                 Background="Transparent" BorderThickness="0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnThumbnailSelectionChanged"
+                                 MouseEnter="OnThumbnailListMouseEnter"
+                                 MouseLeave="OnThumbnailListMouseLeave"
+                                 VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.VirtualizationMode="Recycling">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    <Setter Property="Padding" Value="2"/>
+                                    <Setter Property="Margin" Value="0,1"/>
+                                    <Setter Property="Background" Value="Transparent"/>
+                                    <Setter Property="BorderBrush" Value="Transparent"/>
+                                    <Setter Property="BorderThickness" Value="2"/>
+                                    <Style.Triggers>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Background" Value="#33007ACC"/>
+                                        </Trigger>
+                                        <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                            <Setter Property="BorderBrush" Value="#FF2D6CDF"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="White" BorderBrush="#DDDDDD" BorderThickness="1" Padding="3">
+                                        <StackPanel>
+                                            <Image Source="{Binding Thumbnail}" Stretch="Uniform"
+                                                   MaxHeight="220" MinHeight="40"/>
+                                            <TextBlock Text="{Binding Title}" HorizontalAlignment="Center"
+                                                       FontSize="11" Foreground="#FF555555" Margin="0,2,0,0"/>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <TextBlock Text="打开 PDF 后显示缩略图"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="Gray" IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Thumbnails.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
                 </TabItem>
                 <TabItem Header="书签">
-                    <TextBlock Text="书签面板（Phase 3）"
-                               VerticalAlignment="Center" HorizontalAlignment="Center" Foreground="Gray"/>
+                    <Grid>
+                        <TreeView x:Name="BookmarkTree"
+                                  ItemsSource="{Binding Bookmarks}"
+                                  Background="Transparent" BorderThickness="0"
+                                  SelectedItemChanged="OnBookmarkSelectionChanged">
+                            <TreeView.ItemContainerStyle>
+                                <Style TargetType="TreeViewItem">
+                                    <Setter Property="IsExpanded" Value="True"/>
+                                    <Setter Property="Margin" Value="0,1"/>
+                                </Style>
+                            </TreeView.ItemContainerStyle>
+                            <TreeView.ItemTemplate>
+                                <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding PageLabel}" Foreground="Gray"
+                                                   FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </HierarchicalDataTemplate>
+                            </TreeView.ItemTemplate>
+                        </TreeView>
+                        <TextBlock Text="该 PDF 没有书签目录"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="Gray" IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Bookmarks.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
                 </TabItem>
             </TabControl>
 
