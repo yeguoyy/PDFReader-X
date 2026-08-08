@@ -9,6 +9,8 @@ using Microsoft.Win32;
 using PDFReaderX.App;
 using PDFReaderX.App.Controls;
 using PDFReaderX.App.Helpers;
+using PDFReaderX.App.Models;
+using PDFReaderX.App.Services;
 using PDFReaderX.Core.Services;
 using PDFReaderX.LLM;
 
@@ -87,6 +89,43 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         Colors.Yellow, Colors.Lime, Colors.Cyan, Colors.Magenta, Colors.Orange,
     };
+
+    public IReadOnlyList<TextBorderStyleOption> TextBorderStyles { get; } = new[]
+    {
+        new TextBorderStyleOption("black-dashed", "黑色细虚线"),
+        new TextBorderStyleOption("blue-solid", "蓝色实线"),
+        new TextBorderStyleOption("black-solid", "黑色实线"),
+        new TextBorderStyleOption("gray-thin", "灰色细线"),
+        new TextBorderStyleOption("none", "无边框"),
+    };
+
+    /// <summary>文本框边框样式（从本地设置加载，修改即保存）。</summary>
+    [ObservableProperty]
+    private string _textBorderStyle = AppSettingsStore.Load().TextBoxBorderStyle;
+
+    /// <summary>缩略图当前页指示框颜色（跟随边框设置，实线显示）。</summary>
+    public Brush CurrentPageBorderBrush => TextBorderStyle switch
+    {
+        "blue-solid" => new SolidColorBrush(Color.FromRgb(0x2D, 0x6C, 0xDF)),
+        "black-solid" => Brushes.Black,
+        "gray-thin" => new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA)),
+        "none" => Brushes.Transparent,
+        _ => Brushes.Black,
+    };
+
+    partial void OnTextBorderStyleChanged(string value)
+    {
+        var settings = AppSettingsStore.Load();
+        settings.TextBoxBorderStyle = value;
+        AppSettingsStore.Save(settings);
+        OnPropertyChanged(nameof(CurrentPageBorderBrush));
+    }
+
+    public IReadOnlyList<double> TextFontSizes { get; } = new[] { 10.0, 12.0, 14.0, 16.0, 20.0, 24.0, 32.0 };
+
+    /// <summary>文本框字号（新建文本框与编辑中生效）。</summary>
+    [ObservableProperty]
+    private double _textFontSize = 14.0;
 
     public IReadOnlyList<double> PenWidths { get; } = new[] { 1.5, 3.0, 5.0 };
     public IReadOnlyList<double> HighlightWidths { get; } = new[] { 16.0, 24.0, 32.0 };

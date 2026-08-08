@@ -7,4 +7,5 @@ public enum InkTool
     Pen,
     Highlighter,
     Eraser,
+    Text,
 }

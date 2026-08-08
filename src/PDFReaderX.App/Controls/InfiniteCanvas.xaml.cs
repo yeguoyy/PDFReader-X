@@ -63,6 +63,19 @@ public partial class InfiniteCanvas : UserControl
         nameof(EraserWidth), typeof(double), typeof(InfiniteCanvas),
         new PropertyMetadata(16.0, OnToolChanged));
 
+    public static readonly DependencyProperty TextBorderStyleProperty = DependencyProperty.Register(
+        nameof(TextBorderStyle), typeof(string), typeof(InfiniteCanvas),
+        new PropertyMetadata("black-dashed", OnTextBorderStyleChanged));
+
+    private static void OnTextBorderStyleChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        ((InfiniteCanvas)d).RefreshElementBorders();
+    }
+
+    public static readonly DependencyProperty TextFontSizeProperty = DependencyProperty.Register(
+        nameof(TextFontSize), typeof(double), typeof(InfiniteCanvas),
+        new PropertyMetadata(14.0, OnTextFontSizeChanged));
+
     public static readonly DependencyProperty CurrentPageIndexProperty = DependencyProperty.Register(
         nameof(CurrentPageIndex), typeof(int), typeof(InfiniteCanvas),
         new FrameworkPropertyMetadata(0, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
@@ -154,6 +167,28 @@ public partial class InfiniteCanvas : UserControl
         set => SetValue(EraserWidthProperty, value);
     }
 
+    public string TextBorderStyle
+    {
+        get => (string)GetValue(TextBorderStyleProperty);
+        set => SetValue(TextBorderStyleProperty, value);
+    }
+
+    public double TextFontSize
+    {
+        get => (double)GetValue(TextFontSizeProperty);
+        set => SetValue(TextFontSizeProperty, value);
+    }
+
+    private static void OnTextFontSizeChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var canvas = (InfiniteCanvas)d;
+        if (canvas._editingTextElement?.Content is TextBox box)
+        {
+            box.FontSize = (double)e.NewValue; // 编辑中改字号立即生效
+            canvas.AutoSizeTextEditBox(); // 字号变化后同步扩展框高
+        }
+    }
+
     public int CurrentPageIndex
     {
         get => (int)GetValue(CurrentPageIndexProperty);
@@ -186,8 +221,7 @@ public partial class InfiniteCanvas : UserControl
     {
         _pan = default;
         Zoom = 1.0;
-        PanTransform.X = 0;
-        PanTransform.Y = 0;
+        UpdatePanTransform();
         LayoutPages();
         ScheduleRerender();
         UpdateCurrentPage();
@@ -215,8 +249,7 @@ public partial class InfiniteCanvas : UserControl
         }
 
         _pan = new Point(0, -Canvas.GetTop(element));
-        PanTransform.X = 0;
-        PanTransform.Y = _pan.Y;
+        UpdatePanTransform();
         ScheduleRerender();
         SetCurrentPage(index);
         UpdateScrollState();
@@ -328,8 +361,7 @@ public partial class InfiniteCanvas : UserControl
     private static void OnZoomChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var canvas = (InfiniteCanvas)d;
-        canvas.PanTransform.X = canvas._pan.X;
-        canvas.PanTransform.Y = canvas._pan.Y;
+        canvas.UpdatePanTransform();
         canvas.LayoutPages();
         canvas.ScheduleRerender();
     }
@@ -337,8 +369,21 @@ public partial class InfiniteCanvas : UserControl
     private static void OnToolChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var canvas = (InfiniteCanvas)d;
+        if (e.Property == ActiveToolProperty)
+        {
+            canvas.CommitTextElement(); // 仅切换工具时提交/清理未完成的输入框
+        }
+        else if (e.Property == PenColorProperty && canvas._editingTextElement?.Content is TextBox box)
+        {
+            box.Foreground = new SolidColorBrush(canvas.PenColor); // 编辑中改颜色立即生效，不打断输入
+        }
         canvas.UpdateEditingState();
-        canvas.Cursor = canvas.ActiveTool == InkTool.Select ? Cursors.Hand : Cursors.Arrow;
+        canvas.Cursor = canvas.ActiveTool switch
+        {
+            InkTool.Select => Cursors.Hand,
+            InkTool.Text => Cursors.IBeam,
+            _ => Cursors.Arrow,
+        };
     }
 
     private void RebuildPages()
@@ -353,10 +398,11 @@ public partial class InfiniteCanvas : UserControl
         _pendingRenders.Clear();
         _documentEpoch++;
         _pan = default;
-        PanTransform.X = 0;
-        PanTransform.Y = 0;
+        UpdatePanTransform();
         ScrollOffset = 0;
 
+        ClearElements();
+        ClearUndoHistory();
         CreateFreeInkLayer();
 
         if (Pages is null)
@@ -396,6 +442,8 @@ public partial class InfiniteCanvas : UserControl
         ink.RenderTransformOrigin = new Point(0.5, 0.5);
         Panel.SetZIndex(ink, int.MinValue);
         ink.PreviewTouchDown += OnInkPreviewTouchDown;
+        ink.StrokeCollected += OnStrokeCollected;
+        ink.StrokeErasing += OnStrokeErasing;
         ViewportCanvas.Children.Add(ink);
         _freeInk = ink;
         ApplyToolToInk(ink);
@@ -417,6 +465,8 @@ public partial class InfiniteCanvas : UserControl
             Strokes = page.Strokes,
         };
         ink.PreviewTouchDown += OnInkPreviewTouchDown;
+        ink.StrokeCollected += OnStrokeCollected;
+        ink.StrokeErasing += OnStrokeErasing;
 
         var grid = new Grid();
         grid.Children.Add(image);
@@ -439,14 +489,39 @@ public partial class InfiniteCanvas : UserControl
         return border;
     }
 
+    private double _docOffsetX; // 文档整体水平居中偏移（并入平移量，保证缩放时页面与元素相对位置不变）
+
+    /// <summary>文档水平居中偏移：文档宽度小于视口时居中，否则贴左。</summary>
+    private double GetDocOffsetX(double zoom)
+    {
+        var docWidth = 0.0;
+        if (Pages is not null)
+        {
+            foreach (var page in Pages)
+            {
+                docWidth = Math.Max(docWidth, page.BaseWidth);
+            }
+        }
+        return Math.Max(0, (ActualWidth - docWidth * zoom) / 2);
+    }
+
+    /// <summary>平移总量 = 手动平移 + 文档居中偏移，统一各调用点。</summary>
+    private void UpdatePanTransform()
+    {
+        PanTransform.X = _pan.X + _docOffsetX;
+        PanTransform.Y = _pan.Y;
+    }
+
     private void LayoutPages()
     {
+        UpdateElementsLayout();
         if (Pages is null || Pages.Count == 0)
         {
             UpdateScrollState();
             return;
         }
 
+        _docOffsetX = GetDocOffsetX(Zoom);
 
         var heights = new double[Pages.Count];
         for (var i = 0; i < Pages.Count; i++)
@@ -467,12 +542,12 @@ public partial class InfiniteCanvas : UserControl
                 continue;
             }
 
-            var scaledWidth = page.BaseWidth * Zoom;
-            var left = Math.Max(0, (ActualWidth - scaledWidth) / 2);
-            Canvas.SetLeft(element, left);
+            // 页面水平定位统一在文档原点（居中偏移并入平移量），保证缩放时页面与元素不产生相对位移
+            Canvas.SetLeft(element, 0);
             Canvas.SetTop(element, offsets[i]);
             element.RenderTransform = new ScaleTransform(Zoom, Zoom);
         }
+        UpdatePanTransform();
         UpdateScrollState();
     }
 
@@ -513,7 +588,7 @@ public partial class InfiniteCanvas : UserControl
         }
 
 
-        var viewport = new Rect(-_pan.X, -_pan.Y, Math.Max(1, ActualWidth), Math.Max(1, ActualHeight));
+        var viewport = new Rect(-(_pan.X + _docOffsetX), -_pan.Y, Math.Max(1, ActualWidth), Math.Max(1, ActualHeight));
         viewport.Inflate(120, 120);
 
         foreach (var page in Pages)
@@ -649,7 +724,7 @@ public partial class InfiniteCanvas : UserControl
             return;
         }
         _pan.Y = -clamped;
-        PanTransform.Y = _pan.Y;
+        UpdatePanTransform();
         ScheduleRerender();
         UpdateCurrentPage();
     }
@@ -682,9 +757,12 @@ public partial class InfiniteCanvas : UserControl
             return;
         }
 
-        var (x, y) = CanvasTransform.ZoomAt(center.X, center.Y, _pan.X, _pan.Y, Zoom, newZoom);
-        _pan = new Point(x, y);
+        var oldOffsetX = GetDocOffsetX(Zoom);
+        var newOffsetX = GetDocOffsetX(newZoom);
+        var (x, y) = CanvasTransform.ZoomAt(center.X, center.Y, _pan.X + oldOffsetX, _pan.Y, Zoom, newZoom);
+        _pan = new Point(x - newOffsetX, y);
         Zoom = newZoom; // 触发 OnZoomChanged → PanTransform + LayoutPages + 重渲染
+        UpdatePanTransform();
         UpdateCurrentPage();
         UpdateScrollState();
     }
@@ -697,8 +775,7 @@ public partial class InfiniteCanvas : UserControl
         }
 
         _pan = new Point(_pan.X + dx, _pan.Y + dy);
-        PanTransform.X = _pan.X;
-        PanTransform.Y = _pan.Y;
+        UpdatePanTransform();
         ScheduleRerender();
         UpdateCurrentPage();
         UpdateScrollState();
@@ -727,6 +804,47 @@ public partial class InfiniteCanvas : UserControl
 
     private void OnMouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (e.ChangedButton == MouseButton.Left && ActiveTool == InkTool.Text && !_touchActive)
+        {
+            var position = e.GetPosition(RootGrid);
+            // 点击已有输入框：不重建，放行给 TextBox 获得焦点输入
+            if (_editingTextElement is not null && IsPointInElement(position, _editingTextElement))
+            {
+                return;
+            }
+            var hadEditor = _editingTextElement is not null;
+            if (hadEditor)
+            {
+                // 先确认当前输入框，再判断点击目标，支持直接切换到另一个文本
+                CommitTextElement();
+            }
+            // 点击已有文本：直接进入编辑（OneNote 风格），光标定位到点击处
+            if (FindTextElementAt(position) is { } hit)
+            {
+                StartTextEdit(hit, position);
+                e.Handled = true;
+                return;
+            }
+            if (hadEditor)
+            {
+                // 有字点其他空白处确认提交，不再自动开新文本框
+                e.Handled = true;
+                return;
+            }
+            // 创建新文本框；按住拖动可调整初始大小，松开后聚焦输入
+            _textCreateActive = true;
+            _textCreateStart = position;
+            StartTextElementAt(position);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.ChangedButton == MouseButton.Left && ActiveTool == InkTool.Select
+            && _selectedElement is not null)
+        {
+            Deselect(); // 点击空白取消选择，随后继续平移
+        }
+
         var isPanButton = e.ChangedButton == MouseButton.Middle
             || (e.ChangedButton == MouseButton.Left && ActiveTool == InkTool.Select);
         if (isPanButton)
@@ -740,6 +858,12 @@ public partial class InfiniteCanvas : UserControl
 
     private void OnMouseMove(object sender, MouseEventArgs e)
     {
+        if (_textCreateActive && _editingTextElement is not null)
+        {
+            ResizeTextCreate(e.GetPosition(RootGrid));
+            e.Handled = true;
+            return;
+        }
         if (_isMousePanning)
         {
             var point = e.GetPosition(this);
@@ -751,6 +875,16 @@ public partial class InfiniteCanvas : UserControl
 
     private void OnMouseUp(object sender, MouseButtonEventArgs e)
     {
+        if (_textCreateActive)
+        {
+            _textCreateActive = false;
+            if (_editingTextElement is { Content: TextBox textBox })
+            {
+                FocusTextEditBox(textBox); // 拖动（或点击）结束后聚焦输入
+            }
+            e.Handled = true;
+            return;
+        }
         if (_isMousePanning
             && (e.ChangedButton == MouseButton.Middle
                 || (e.ChangedButton == MouseButton.Left && ActiveTool == InkTool.Select)))
@@ -767,6 +901,26 @@ public partial class InfiniteCanvas : UserControl
         LayoutPages();
         ScheduleRerender();
         UpdateCurrentPage();
+    }
+
+    // ---------- 墨迹撤销 ----------
+
+    private void OnStrokeCollected(object? sender, InkCanvasStrokeCollectedEventArgs e)
+    {
+        var stroke = e.Stroke;
+        var strokes = ((InkCanvas)sender!).Strokes;
+        RecordUndo(
+            undo: () => strokes.Remove(stroke),
+            redo: () => strokes.Add(stroke));
+    }
+
+    private void OnStrokeErasing(object? sender, InkCanvasStrokeErasingEventArgs e)
+    {
+        var stroke = e.Stroke;
+        var strokes = ((InkCanvas)sender!).Strokes;
+        RecordUndo(
+            undo: () => strokes.Add(stroke),
+            redo: () => strokes.Remove(stroke));
     }
 
     // ---------- 触摸输入（单指平移 / 双指缩放） ----------
@@ -847,7 +1001,7 @@ public partial class InfiniteCanvas : UserControl
 
     private void ApplyToolToInk(InkCanvas ink)
     {
-        var editingMode = _touchActive || ActiveTool == InkTool.Select
+        var editingMode = _touchActive || ActiveTool is InkTool.Select or InkTool.Text
             ? InkCanvasEditingMode.None
             : ActiveTool == InkTool.Eraser
                 ? InkCanvasEditingMode.EraseByStroke

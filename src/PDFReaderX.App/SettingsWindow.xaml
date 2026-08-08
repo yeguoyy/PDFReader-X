@@ -91,6 +91,16 @@
                     <TextBlock Text="• 触摸：单指平移，双指缩放" Margin="0,2,0,0"/>
                     <TextBlock Text="• 钢笔/荧光笔/橡皮擦：可在页面及页面外的白色画布区域使用" Margin="0,2,0,0"/>
                     <Separator Margin="0,12"/>
+                    <TextBlock Text="文本框边框" FontWeight="Bold" FontSize="14"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                        <TextBlock Text="输入框边框款式:" VerticalAlignment="Center"/>
+                        <ComboBox Width="140" Margin="8,0,0,0"
+                                  ItemsSource="{Binding TextBorderStyles}"
+                                  SelectedValuePath="Key" DisplayMemberPath="Name"
+                                  SelectedValue="{Binding TextBorderStyle}"
+                                  ToolTip="选择后立即生效，作用于之后新建的文本框"/>
+                    </StackPanel>
+                    <Separator Margin="0,12"/>
                     <TextBlock Text="数据与存储" FontWeight="Bold" FontSize="14"/>
                     <TextBlock Text="LLM 设置保存在 %AppData%\PDFReaderX\llm-settings.json，不会进入项目仓库。"
                                Foreground="Gray" TextWrapping="Wrap" Margin="0,6,0,0"/>

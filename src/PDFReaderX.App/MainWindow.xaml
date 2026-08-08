@@ -7,7 +7,8 @@
         Icon="Resources/AppLogo.ico"
         Height="800" Width="1280"
         WindowStartupLocation="CenterScreen"
-        AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop">
+        AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop"
+        PreviewKeyDown="OnPreviewKeyDown">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <converters:ColorToBrushConverter x:Key="ColorToBrush"/>
@@ -40,6 +41,16 @@
                          IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Highlighter}"/>
             <RadioButton Content="橡皮擦" GroupName="InkTool" Margin="4,2"
                          IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Eraser}"/>
+            <RadioButton Content="文本" GroupName="InkTool" Margin="4,2"
+                         IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Text}"
+                         ToolTip="点击画布插入文本框，回车确认、Esc 取消"/>
+            <Separator/>
+            <Button Content="图片" Margin="4,2" Click="OnInsertImageClick"
+                    ToolTip="从文件插入图片到画布（也可 Ctrl+V 粘贴或直接拖入）"/>
+            <Button x:Name="UndoButton" Content="撤销" Margin="4,2" IsEnabled="False" Click="OnUndoClick"
+                    ToolTip="撤销上一步操作 (Ctrl+Z)"/>
+            <Button x:Name="RedoButton" Content="重做" Margin="4,2" IsEnabled="False" Click="OnRedoClick"
+                    ToolTip="重做已撤销的操作 (Ctrl+Y)"/>
             <Separator/>
             <TextBlock Text="颜色:" VerticalAlignment="Center" Margin="4,0"/>
             <ComboBox Width="70" ItemsSource="{Binding PenColors}" SelectedItem="{Binding PenColor}"
@@ -68,6 +79,18 @@
                 </ComboBox.ItemTemplate>
             </ComboBox>
             <Separator/>
+            <Separator/>
+            <TextBlock Text="字号:" VerticalAlignment="Center" Margin="4,0"/>
+            <ComboBox Width="56" ItemsSource="{Binding TextFontSizes}" SelectedItem="{Binding TextFontSize}"
+                      Margin="2,2" ToolTip="文本框字号（编辑时立即生效）"/>
+            <Button Content="B" FontWeight="Bold" Width="26" Margin="2,2" Click="OnBoldClick"
+                    ToolTip="加粗（编辑文本框时 Ctrl+B）"/>
+            <Button Content="I" FontStyle="Italic" Width="26" Margin="2,2" Click="OnItalicClick"
+                    ToolTip="斜体（编辑文本框时 Ctrl+I）"/>
+            <Button Width="26" Margin="2,2" Click="OnUnderlineClick"
+                    ToolTip="下划线（编辑文本框时 Ctrl+U）">
+                <TextBlock Text="U" TextDecorations="Underline"/>
+            </Button>
             <TextBlock Text="笔粗:" VerticalAlignment="Center" Margin="4,0"/>
             <ComboBox Width="52" ItemsSource="{Binding PenWidths}" SelectedItem="{Binding PenWidth}" Margin="2,2"/>
             <TextBlock Text="荧光粗:" VerticalAlignment="Center" Margin="4,0"/>
@@ -114,7 +137,7 @@
                                             <Setter Property="Background" Value="#33007ACC"/>
                                         </Trigger>
                                         <DataTrigger Binding="{Binding IsCurrent}" Value="True">
-                                            <Setter Property="BorderBrush" Value="#FF2D6CDF"/>
+                                            <Setter Property="BorderBrush" Value="{Binding DataContext.CurrentPageBorderBrush, RelativeSource={RelativeSource AncestorType=Window}}"/>
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
@@ -227,7 +250,9 @@
                                              PenWidth="{Binding PenWidth}"
                                              HighlightColor="{Binding HighlightColor}"
                                              HighlightWidth="{Binding HighlightWidth}"
-                                             EraserWidth="{Binding EraserWidth}"/>
+                                             EraserWidth="{Binding EraserWidth}"
+                                             TextBorderStyle="{Binding TextBorderStyle}"
+                                             TextFontSize="{Binding TextFontSize}"/>
                     <TextBlock Text="打开一个 PDF 文件开始"
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                FontSize="20" Foreground="#FF909090">

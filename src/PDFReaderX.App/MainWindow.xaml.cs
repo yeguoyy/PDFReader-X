@@ -2,8 +2,10 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using Microsoft.Win32;
 using PDFReaderX.App.ViewModels;
 
 namespace PDFReaderX.App;
@@ -16,6 +18,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
+        Canvas.UndoStateChanged += (_, _) => UpdateUndoButtons();
+        UpdateUndoButtons();
     }
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
@@ -50,6 +54,50 @@ public partial class MainWindow : Window
     private void OnResetZoomClick(object sender, RoutedEventArgs e)
     {
         Canvas.ResetView();
+    }
+
+    private void OnInsertImageClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "插入图片",
+            Filter = "图片文件 (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp)|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp|所有文件 (*.*)|*.*",
+        };
+        if (dialog.ShowDialog() == true && !Canvas.InsertImageFromFile(dialog.FileName))
+        {
+            MessageBox.Show("无法加载该图片文件。", "PDFReader X", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void OnUndoClick(object sender, RoutedEventArgs e)
+    {
+        Canvas.Undo();
+    }
+
+    private void OnRedoClick(object sender, RoutedEventArgs e)
+    {
+        Canvas.Redo();
+    }
+
+    private void OnBoldClick(object sender, RoutedEventArgs e)
+    {
+        Canvas.ToggleEditBold();
+    }
+
+    private void OnItalicClick(object sender, RoutedEventArgs e)
+    {
+        Canvas.ToggleEditItalic();
+    }
+
+    private void OnUnderlineClick(object sender, RoutedEventArgs e)
+    {
+        Canvas.ToggleEditUnderline();
+    }
+
+    private void UpdateUndoButtons()
+    {
+        UndoButton.IsEnabled = Canvas.CanUndo;
+        RedoButton.IsEnabled = Canvas.CanRedo;
     }
 
     /// <summary>缩略图列表滚轮：一次滚动半页视口高度，避免速度过快。</summary>
@@ -107,7 +155,37 @@ public partial class MainWindow : Window
         _thumbnailListHover = false;
     }
 
-    // 拖拽 PDF 到窗口任意位置打开
+    // 快捷键：撤销/重做/删除/粘贴图片（文本框编辑中不拦截）
+    private void OnPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (Keyboard.FocusedElement is TextBoxBase)
+        {
+            return;
+        }
+        var ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+        if (ctrl && e.Key == Key.Z)
+        {
+            Canvas.Undo();
+            e.Handled = true;
+        }
+        else if (ctrl && e.Key == Key.Y)
+        {
+            Canvas.Redo();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Delete)
+        {
+            Canvas.DeleteSelectedElement();
+            e.Handled = true;
+        }
+        else if (ctrl && e.Key == Key.V && Clipboard.ContainsImage())
+        {
+            Canvas.InsertImage(Clipboard.GetImage());
+            e.Handled = true;
+        }
+    }
+
+    // 拖拽 PDF / 图片到窗口任意位置打开或插入
     private void OnDragOver(object sender, DragEventArgs e)
     {
         e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop)
@@ -119,12 +197,24 @@ public partial class MainWindow : Window
     private void OnDrop(object sender, DragEventArgs e)
     {
         if (e.Data.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0
-            && File.Exists(files[0])
-            && string.Equals(Path.GetExtension(files[0]), ".pdf", System.StringComparison.OrdinalIgnoreCase))
+            && File.Exists(files[0]))
         {
-            if (DataContext is MainWindowViewModel viewModel)
+            var first = files[0];
+            var extension = Path.GetExtension(first).ToLowerInvariant();
+            if (extension == ".pdf")
             {
-                _ = viewModel.OpenFileAsync(files[0]);
+                if (DataContext is MainWindowViewModel viewModel)
+                {
+                    _ = viewModel.OpenFileAsync(first);
+                }
+            }
+            else if (extension is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".webp")
+            {
+                var position = e.GetPosition(Canvas);
+                if (!Canvas.InsertImageFromFile(first, position, selectAfterInsert: false)) // 拖入保持当前工具，不打断书写
+                {
+                    MessageBox.Show("无法加载该图片文件。", "PDFReader X", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
             }
         }
         e.Handled = true;
