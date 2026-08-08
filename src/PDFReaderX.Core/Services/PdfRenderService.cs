@@ -10,6 +10,7 @@ namespace PDFReaderX.Core.Services;
 public sealed class PdfRenderService : IDisposable
 {
     private readonly PdfDocument _document;
+    private readonly object _renderLock = new();
 
     private PdfRenderService(PdfDocument document, string filePath)
     {
@@ -39,11 +40,20 @@ public sealed class PdfRenderService : IDisposable
         var size = GetPageSize(pageIndex);
         var width = (int)Math.Ceiling(size.Width * dpi / 72.0);
         var height = (int)Math.Ceiling(size.Height * dpi / 72.0);
-        return _document.Render(pageIndex, width, height, dpi, dpi, flags);
+        lock (_renderLock)
+        {
+            return _document.Render(pageIndex, width, height, dpi, dpi, flags);
+        }
     }
 
     /// <summary>提取页面文本（Phase 4 LLM 书签生成使用）。</summary>
-    public string GetPageText(int pageIndex) => _document.GetPdfText(pageIndex);
+    public string GetPageText(int pageIndex)
+    {
+        lock (_renderLock)
+        {
+            return _document.GetPdfText(pageIndex);
+        }
+    }
 
     public void Dispose() => _document.Dispose();
 }

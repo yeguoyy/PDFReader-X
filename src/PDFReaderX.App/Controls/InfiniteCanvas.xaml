@@ -1,0 +1,23 @@
+<UserControl x:Class="PDFReaderX.App.Controls.InfiniteCanvas"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid x:Name="RootGrid"
+          Background="Transparent"
+          ClipToBounds="True"
+          IsManipulationEnabled="True"
+          MouseWheel="OnMouseWheel"
+          MouseDown="OnMouseDown"
+          MouseMove="OnMouseMove"
+          MouseUp="OnMouseUp"
+          SizeChanged="OnSizeChanged"
+          ManipulationStarting="OnManipulationStarting"
+          ManipulationDelta="OnManipulationDelta"
+          ManipulationInertiaStarting="OnManipulationInertiaStarting"
+          ManipulationCompleted="OnManipulationCompleted">
+        <Canvas x:Name="ViewportCanvas">
+            <Canvas.RenderTransform>
+                <TranslateTransform x:Name="PanTransform"/>
+            </Canvas.RenderTransform>
+        </Canvas>
+    </Grid>
+</UserControl>
