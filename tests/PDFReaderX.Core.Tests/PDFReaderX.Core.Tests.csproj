@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PDFReaderX.Core\PDFReaderX.Core.csproj" />
+    <ProjectReference Include="..\..\src\PDFReaderX.LLM\PDFReaderX.LLM.csproj" />
   </ItemGroup>
 
 </Project>

@@ -26,6 +26,8 @@
             <Button Content="打开 PDF" Command="{Binding OpenCommand}" Margin="4,2"/>
             <Button Content="关闭" Command="{Binding CloseCommand}" Margin="4,2"/>
             <Separator/>
+            <Button Content="LLM 设置" Command="{Binding OpenLlmSettingsCommand}" Margin="4,2"
+                    ToolTip="配置 API 地址、密钥与模型"/>
             <TextBlock Text="{Binding FileName}" VerticalAlignment="Center" Margin="4,0"/>
         </ToolBar>
 
@@ -152,7 +154,11 @@
                 </TabItem>
                 <TabItem Header="书签">
                     <Grid>
-                        <TreeView x:Name="BookmarkTree"
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TreeView x:Name="BookmarkTree" Grid.Row="0"
                                   ItemsSource="{Binding Bookmarks}"
                                   Background="Transparent" BorderThickness="0"
                                   SelectedItemChanged="OnBookmarkSelectionChanged">
@@ -172,11 +178,14 @@
                                 </HierarchicalDataTemplate>
                             </TreeView.ItemTemplate>
                         </TreeView>
-                        <TextBlock Text="该 PDF 没有书签目录"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   Foreground="Gray" IsHitTestVisible="False">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
+                        <StackPanel Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    IsHitTestVisible="False">
+                            <TextBlock Text="该 PDF 没有书签目录" HorizontalAlignment="Center"
+                                       Foreground="Gray"/>
+                            <TextBlock Text="点击下方按钮用 AI 自动生成" HorizontalAlignment="Center"
+                                       Foreground="Gray" FontSize="11" Margin="0,4,0,0"/>
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding Bookmarks.Count}" Value="0">
@@ -184,8 +193,23 @@
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
+                            </StackPanel.Style>
+                        </StackPanel>
+                        <Border Grid.Row="1" Padding="8" Background="#FFF7F7F7"
+                        BorderBrush="#FFDDDDDD" BorderThickness="0,1,0,0">
+                    <StackPanel>
+                        <StackPanel Margin="0,2" HorizontalAlignment="Stretch"
+                                    Visibility="{Binding IsGeneratingBookmarks, Converter={StaticResource BoolToVis}}">
+                            <ProgressBar IsIndeterminate="True" Height="4"/>
+                            <TextBlock Text="{Binding BookmarkGenerationStatus}" FontSize="11"
+                                       Foreground="#FF555555" HorizontalAlignment="Center"
+                                       Margin="0,4,0,2" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <Button Content="AI 生成书签" Command="{Binding GenerateBookmarksCommand}"
+                                HorizontalAlignment="Stretch" Margin="0,2"
+                                ToolTip="用大模型阅读 PDF 内容，自动生成书签目录"/>
+                    </StackPanel>
+                </Border>
                     </Grid>
                 </TabItem>
             </TabControl>

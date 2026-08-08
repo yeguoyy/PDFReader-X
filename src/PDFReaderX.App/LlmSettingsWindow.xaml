@@ -1,0 +1,49 @@
+<Window x:Class="PDFReaderX.App.LlmSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="LLM 设置" Height="360" Width="540"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" ResizeMode="NoResize">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <TextBlock Text="API 地址:" Grid.Row="0" Grid.Column="0" VerticalAlignment="Center"/>
+        <TextBox Grid.Row="0" Grid.Column="1" Margin="8,6"
+                 Text="{Binding Endpoint, UpdateSourceTrigger=PropertyChanged}"
+                 ToolTip="OpenAI 兼容接口地址，例如 https://dashscope.aliyuncs.com/compatible-mode/v1"/>
+
+        <TextBlock Text="API Key:" Grid.Row="1" Grid.Column="0" VerticalAlignment="Center"/>
+        <PasswordBox x:Name="ApiKeyBox" Grid.Row="1" Grid.Column="1" Margin="8,6"
+                     ToolTip="调用大模型的密钥，仅保存在本机"/>
+
+        <TextBlock Text="模型:" Grid.Row="2" Grid.Column="0" VerticalAlignment="Center"/>
+        <TextBox x:Name="ModelBox" Grid.Row="2" Grid.Column="1" Margin="8,6"
+                 Text="{Binding Model, UpdateSourceTrigger=PropertyChanged}"
+                 ToolTip="文本模型，用于可提取文字的 PDF"/>
+        <TextBlock Text="视觉模型:" Grid.Row="3" Grid.Column="0" VerticalAlignment="Center"/>
+        <TextBox Grid.Row="3" Grid.Column="1" Margin="8,6"
+                 Text="{Binding VisionModel, UpdateSourceTrigger=PropertyChanged}"
+                 ToolTip="扫描版 PDF（无文字层）时，渲染页面图片交给视觉模型识别生成书签"/>
+
+        <CheckBox Grid.Row="4" Grid.ColumnSpan="2" Margin="8,6,8,0" Content="使用视觉模式前不再询问"
+                  IsChecked="{Binding SkipVisionConfirm}"/>
+        <TextBlock Grid.Row="5" Grid.ColumnSpan="2" Margin="8,2,8,0"
+                   Text="设置保存在 %AppData%\PDFReaderX\llm-settings.json，不会进入项目仓库。"
+                   Foreground="Gray" FontSize="11"/>
+
+        <StackPanel Grid.Row="7" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="保存" Width="80" Margin="4" IsDefault="True" Click="OnSaveClick"/>
+            <Button Content="取消" Width="80" Margin="4" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

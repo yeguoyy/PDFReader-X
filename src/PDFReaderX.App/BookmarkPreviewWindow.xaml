@@ -1,0 +1,62 @@
+<Window x:Class="PDFReaderX.App.BookmarkPreviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AI 生成书签预览" Height="560" Width="680"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="{Binding Hint}" Foreground="#FF2D6CDF" Margin="0,0,0,6"/>
+
+        <TreeView Grid.Row="1" ItemsSource="{Binding Roots}"
+                  SelectedItemChanged="OnTreeSelectionChanged" BorderBrush="#DDDDDD">
+            <TreeView.ItemContainerStyle>
+                <Style TargetType="TreeViewItem">
+                    <Setter Property="IsExpanded" Value="True"/>
+                    <Setter Property="Margin" Value="0,1"/>
+                </Style>
+            </TreeView.ItemContainerStyle>
+            <TreeView.ItemTemplate>
+                <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding PageLabel}" Foreground="Gray"
+                                   FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </HierarchicalDataTemplate>
+            </TreeView.ItemTemplate>
+        </TreeView>
+
+        <Border Grid.Row="2" BorderBrush="#DDDDDD" BorderThickness="1" Margin="0,8" Padding="8">
+            <StackPanel>
+                <TextBlock Text="编辑选中的书签（修改标题或页码）" Foreground="Gray" FontSize="11"/>
+                <Grid Margin="0,6,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="60"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="标题:" VerticalAlignment="Center"/>
+                    <TextBox Grid.Column="1" Margin="6,2"
+                             Text="{Binding Selected.Title, UpdateSourceTrigger=PropertyChanged}"/>
+                    <TextBlock Grid.Column="2" Text="页码:" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                    <TextBox Grid.Column="3" Margin="6,2"
+                             Text="{Binding Selected.PageNumber, UpdateSourceTrigger=PropertyChanged}"/>
+                    <Button Grid.Column="4" Content="删除该书签" Margin="8,2,0,2" Click="OnDeleteClick"/>
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="应用" Width="90" Margin="4" IsDefault="True" Click="OnApplyClick"/>
+            <Button Content="取消" Width="90" Margin="4" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>
