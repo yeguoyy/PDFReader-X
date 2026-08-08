@@ -2,6 +2,8 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using PDFReaderX.App.ViewModels;
 
 namespace PDFReaderX.App;
@@ -48,6 +50,35 @@ public partial class MainWindow : Window
     private void OnResetZoomClick(object sender, RoutedEventArgs e)
     {
         Canvas.ResetView();
+    }
+
+    /// <summary>缩略图列表滚轮：一次滚动半页视口高度，避免速度过快。</summary>
+    private void OnThumbnailListPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (FindVisualChild<ScrollViewer>(ThumbnailList) is not ScrollViewer scrollViewer)
+        {
+            return;
+        }
+        var step = Math.Max(1, scrollViewer.ViewportHeight / 2.0);
+        scrollViewer.ScrollToVerticalOffset(scrollViewer.VerticalOffset - Math.Sign(e.Delta) * step);
+        e.Handled = true;
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T match)
+            {
+                return match;
+            }
+            if (FindVisualChild<T>(child) is T found)
+            {
+                return found;
+            }
+        }
+        return null;
     }
 
     private void OnThumbnailSelectionChanged(object sender, SelectionChangedEventArgs e)

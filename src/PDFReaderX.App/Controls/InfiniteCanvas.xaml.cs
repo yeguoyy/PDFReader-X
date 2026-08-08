@@ -63,16 +63,25 @@ public partial class InfiniteCanvas : UserControl
         nameof(EraserWidth), typeof(double), typeof(InfiniteCanvas),
         new PropertyMetadata(16.0, OnToolChanged));
 
-    public static readonly DependencyProperty PageGapProperty = DependencyProperty.Register(
-        nameof(PageGap), typeof(double), typeof(InfiniteCanvas),
-        new PropertyMetadata(24.0, OnPageGapChanged));
-
     public static readonly DependencyProperty CurrentPageIndexProperty = DependencyProperty.Register(
         nameof(CurrentPageIndex), typeof(int), typeof(InfiniteCanvas),
         new FrameworkPropertyMetadata(0, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
 
+    public static readonly DependencyProperty ScrollOffsetProperty = DependencyProperty.Register(
+        nameof(ScrollOffset), typeof(double), typeof(InfiniteCanvas),
+        new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault, OnScrollOffsetChanged));
+
+    public static readonly DependencyProperty MaxScrollOffsetProperty = DependencyProperty.Register(
+        nameof(MaxScrollOffset), typeof(double), typeof(InfiniteCanvas),
+        new PropertyMetadata(0.0));
+
+    public static readonly DependencyProperty ViewportHeightProperty = DependencyProperty.Register(
+        nameof(ViewportHeight), typeof(double), typeof(InfiniteCanvas),
+        new PropertyMetadata(0.0));
+
     private readonly Dictionary<int, Border> _pageElements = new();
     private readonly Dictionary<int, InkCanvas> _inkCanvases = new();
+    private InkCanvas? _freeInk;
     private readonly Dictionary<int, Rectangle> _imagesByPage = new();
     private readonly Dictionary<int, BitmapSource> _bitmapCache = new();
     private readonly List<int> _cacheOrder = new();
@@ -145,16 +154,31 @@ public partial class InfiniteCanvas : UserControl
         set => SetValue(EraserWidthProperty, value);
     }
 
-    public double PageGap
-    {
-        get => (double)GetValue(PageGapProperty);
-        set => SetValue(PageGapProperty, value);
-    }
-
     public int CurrentPageIndex
     {
         get => (int)GetValue(CurrentPageIndexProperty);
         set => SetValue(CurrentPageIndexProperty, value);
+    }
+
+    /// <summary>垂直滚动偏移：内容顶部相对视口顶部的距离（即 -_pan.Y）。</summary>
+    public double ScrollOffset
+    {
+        get => (double)GetValue(ScrollOffsetProperty);
+        set => SetValue(ScrollOffsetProperty, value);
+    }
+
+    /// <summary>垂直可滚动范围上限（内容总高 - 视口高，不小于 0）。</summary>
+    public double MaxScrollOffset
+    {
+        get => (double)GetValue(MaxScrollOffsetProperty);
+        set => SetValue(MaxScrollOffsetProperty, value);
+    }
+
+    /// <summary>视口高度，供右侧滚动条滑块比例使用。</summary>
+    public double ViewportHeight
+    {
+        get => (double)GetValue(ViewportHeightProperty);
+        set => SetValue(ViewportHeightProperty, value);
     }
 
     /// <summary>回到 100% 缩放并居中显示第一页顶部。</summary>
@@ -167,6 +191,7 @@ public partial class InfiniteCanvas : UserControl
         LayoutPages();
         ScheduleRerender();
         UpdateCurrentPage();
+        UpdateScrollState();
     }
 
     /// <summary>缩放到指定比例，以屏幕中心为缩放中心。</summary>
@@ -189,11 +214,12 @@ public partial class InfiniteCanvas : UserControl
             return;
         }
 
-        _pan = new Point(0, -Canvas.GetTop(element) + PageGap / 2.0);
+        _pan = new Point(0, -Canvas.GetTop(element));
         PanTransform.X = 0;
         PanTransform.Y = _pan.Y;
         ScheduleRerender();
         SetCurrentPage(index);
+        UpdateScrollState();
     }
 
     /// <summary>根据视口中心推算当前页，并写入 CurrentPageIndex（仅在变化时通知）。</summary>
@@ -299,13 +325,6 @@ public partial class InfiniteCanvas : UserControl
         });
     }
 
-    private static void OnPageGapChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-    {
-        var canvas = (InfiniteCanvas)d;
-        canvas.LayoutPages();
-        canvas.ScheduleRerender();
-    }
-
     private static void OnZoomChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var canvas = (InfiniteCanvas)d;
@@ -325,6 +344,7 @@ public partial class InfiniteCanvas : UserControl
     private void RebuildPages()
     {
         ViewportCanvas.Children.Clear();
+        _freeInk = null;
         _pageElements.Clear();
         _inkCanvases.Clear();
         _imagesByPage.Clear();
@@ -335,6 +355,9 @@ public partial class InfiniteCanvas : UserControl
         _pan = default;
         PanTransform.X = 0;
         PanTransform.Y = 0;
+        ScrollOffset = 0;
+
+        CreateFreeInkLayer();
 
         if (Pages is null)
         {
@@ -352,6 +375,30 @@ public partial class InfiniteCanvas : UserControl
         UpdateEditingState();
         ScheduleRerender();
         UpdateCurrentPage();
+    }
+
+    /// <summary>
+    /// 创建铺满画布的底层自由墨迹层：页面之间及画布空白区域也可书写。
+    /// 页面元素通过 ZIndex 覆盖在其上；墨迹随画布统一平移缩放。
+    /// </summary>
+    private void CreateFreeInkLayer()
+    {
+        const double size = 4_000_000;
+        var ink = new InkCanvas
+        {
+            Width = size,
+            Height = size,
+            Background = Brushes.Transparent,
+        };
+        Canvas.SetLeft(ink, -size / 2);
+        Canvas.SetTop(ink, -size / 2);
+        // 缩放以画布中心（世界原点）为锚点，保证自由墨迹与页面墨迹缩放时不发生相对漂移
+        ink.RenderTransformOrigin = new Point(0.5, 0.5);
+        Panel.SetZIndex(ink, int.MinValue);
+        ink.PreviewTouchDown += OnInkPreviewTouchDown;
+        ViewportCanvas.Children.Add(ink);
+        _freeInk = ink;
+        ApplyToolToInk(ink);
     }
 
     private Border CreatePageElement(PageViewModel page)
@@ -396,6 +443,7 @@ public partial class InfiniteCanvas : UserControl
     {
         if (Pages is null || Pages.Count == 0)
         {
+            UpdateScrollState();
             return;
         }
 
@@ -406,7 +454,11 @@ public partial class InfiniteCanvas : UserControl
             heights[i] = Pages[i].BaseHeight * Zoom;
         }
 
-        var offsets = PageLayout.ComputeTopOffsets(heights, PageGap);
+        var offsets = PageLayout.ComputeTopOffsets(heights, 0);
+        if (_freeInk is not null)
+        {
+            _freeInk.RenderTransform = new ScaleTransform(Zoom, Zoom);
+        }
         for (var i = 0; i < Pages.Count; i++)
         {
             var page = Pages[i];
@@ -421,6 +473,7 @@ public partial class InfiniteCanvas : UserControl
             Canvas.SetTop(element, offsets[i]);
             element.RenderTransform = new ScaleTransform(Zoom, Zoom);
         }
+        UpdateScrollState();
     }
 
     private Rect GetPageRect(PageViewModel page)
@@ -580,6 +633,45 @@ public partial class InfiniteCanvas : UserControl
         }
     }
 
+    // ---------- 垂直滚动条 ----------
+
+    private static void OnScrollOffsetChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var canvas = (InfiniteCanvas)d;
+        canvas.ApplyScrollOffset((double)e.NewValue);
+    }
+
+    private void ApplyScrollOffset(double value)
+    {
+        var clamped = Math.Max(0, value);
+        if (Math.Abs(clamped + _pan.Y) < 0.001)
+        {
+            return;
+        }
+        _pan.Y = -clamped;
+        PanTransform.Y = _pan.Y;
+        ScheduleRerender();
+        UpdateCurrentPage();
+    }
+
+    /// <summary>按当前内容总高与视口高度刷新滚动范围，并把滚动偏移限制在范围内。</summary>
+    private void UpdateScrollState()
+    {
+        var max = 0.0;
+        if (Pages is not null && Pages.Count > 0)
+        {
+            var heights = new double[Pages.Count];
+            for (var i = 0; i < Pages.Count; i++)
+            {
+                heights[i] = Pages[i].BaseHeight * Zoom;
+            }
+            var offsets = PageLayout.ComputeTopOffsets(heights, 0);
+            max = Math.Max(0, offsets[^1] + heights[^1] - ActualHeight);
+        }
+        MaxScrollOffset = max;
+        ScrollOffset = Math.Clamp(ScrollOffset, 0, max);
+    }
+
     // ---------- 缩放与平移 ----------
 
     private void ApplyZoom(double newZoom, Point center)
@@ -594,6 +686,7 @@ public partial class InfiniteCanvas : UserControl
         _pan = new Point(x, y);
         Zoom = newZoom; // 触发 OnZoomChanged → PanTransform + LayoutPages + 重渲染
         UpdateCurrentPage();
+        UpdateScrollState();
     }
 
     private void PanBy(double dx, double dy)
@@ -608,6 +701,7 @@ public partial class InfiniteCanvas : UserControl
         PanTransform.Y = _pan.Y;
         ScheduleRerender();
         UpdateCurrentPage();
+        UpdateScrollState();
     }
 
     // ---------- 鼠标输入 ----------
@@ -669,6 +763,7 @@ public partial class InfiniteCanvas : UserControl
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
+        ViewportHeight = ActualHeight;
         LayoutPages();
         ScheduleRerender();
         UpdateCurrentPage();
@@ -732,6 +827,10 @@ public partial class InfiniteCanvas : UserControl
         {
             ink.EditingMode = InkCanvasEditingMode.None;
         }
+        if (_freeInk is not null)
+        {
+            _freeInk.EditingMode = InkCanvasEditingMode.None;
+        }
     }
 
     private void UpdateEditingState()
@@ -739,6 +838,10 @@ public partial class InfiniteCanvas : UserControl
         foreach (var ink in _inkCanvases.Values)
         {
             ApplyToolToInk(ink);
+        }
+        if (_freeInk is not null)
+        {
+            ApplyToolToInk(_freeInk);
         }
     }
 

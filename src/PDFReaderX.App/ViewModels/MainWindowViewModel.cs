@@ -6,6 +6,7 @@ using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
+using PDFReaderX.App;
 using PDFReaderX.App.Controls;
 using PDFReaderX.App.Helpers;
 using PDFReaderX.Core.Services;
@@ -55,10 +56,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private double _zoom = 1.0;
 
-    /// <summary>画布上页面之间的间距（DIP）。</summary>
-    [ObservableProperty]
-    private double _pageGap = 24.0;
-
     /// <summary>当前所在页（0 基），由画布视口中心推算，供侧边栏高亮与跟随。</summary>
     [ObservableProperty]
     private int _currentPageIndex;
@@ -101,11 +98,31 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public RelayCommand OpenLlmSettingsCommand { get; }
 
+    public RelayCommand OpenSettingsCommand { get; }
+
     public AsyncRelayCommand GenerateBookmarksCommand { get; }
 
-    partial void OnHasDocumentChanged(bool value) => GenerateBookmarksCommand.NotifyCanExecuteChanged();
+    /// <summary>侧边栏的 AI 生成书签按钮（有文档且当前没有书签时可用/显示）。</summary>
+    public AsyncRelayCommand AutoGenerateBookmarksCommand { get; }
 
-    partial void OnIsBusyChanged(bool value) => GenerateBookmarksCommand.NotifyCanExecuteChanged();
+    /// <summary>当前是否有书签（PDF 自带或 AI 生成）。</summary>
+    public bool HasBookmarks => Bookmarks.Count > 0;
+
+    /// <summary>侧边栏是否显示“AI 生成书签”按钮：有文档且没有书签时显示，重生成入口在“设置”里。</summary>
+    public bool ShowAutoBookmarkButton => HasDocument && !HasBookmarks;
+
+    partial void OnHasDocumentChanged(bool value)
+    {
+        GenerateBookmarksCommand.NotifyCanExecuteChanged();
+        AutoGenerateBookmarksCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(ShowAutoBookmarkButton));
+    }
+
+    partial void OnIsBusyChanged(bool value)
+    {
+        GenerateBookmarksCommand.NotifyCanExecuteChanged();
+        AutoGenerateBookmarksCommand.NotifyCanExecuteChanged();
+    }
 
     partial void OnCurrentPageIndexChanged(int value)
     {
@@ -125,12 +142,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         OpenCommand = new RelayCommand(Open, () => !IsBusy);
         CloseCommand = new RelayCommand(Close, () => HasDocument);
         OpenLlmSettingsCommand = new RelayCommand(OpenLlmSettings);
+        OpenSettingsCommand = new RelayCommand(OpenSettings);
         GenerateBookmarksCommand = new AsyncRelayCommand(GenerateBookmarksAsync, () => HasDocument && !IsBusy);
+        AutoGenerateBookmarksCommand = new AsyncRelayCommand(
+            GenerateBookmarksAsync, () => HasDocument && !IsBusy && !HasBookmarks);
+        Bookmarks.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(HasBookmarks));
+            OnPropertyChanged(nameof(ShowAutoBookmarkButton));
+            AutoGenerateBookmarksCommand.NotifyCanExecuteChanged();
+        };
     }
 
     private void OpenLlmSettings()
     {
         var window = new LlmSettingsWindow { Owner = Application.Current.MainWindow };
+        window.ShowDialog();
+    }
+
+    private void OpenSettings()
+    {
+        var window = new SettingsWindow(this) { Owner = Application.Current.MainWindow };
         window.ShowDialog();
     }
 
