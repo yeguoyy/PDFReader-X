@@ -248,19 +248,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 return;
             }
 
-            // 回退：文本模式按 100 页一批处理，覆盖整本书
-            const int batchPages = 100;
-            var batches = (pageCount + batchPages - 1) / batchPages;
-            var allBookmarks = new List<LlmBookmark>();
-            for (var batch = 0; batch < batches; batch++)
-            {
-                var start = batch * batchPages;
-                var count = Math.Min(batchPages, pageCount - start);
-                SetGenerationStatus($"正在处理第 {batch + 1}/{batches} 批（第 {FormatPageRange(start + 1, count)}）…");
-                var bookmarks = await GenerateTextBatchAsync(service, document, start, count);
-                allBookmarks.AddRange(bookmarks);
-            }
-            ApplyBookmarkPreview(allBookmarks, pageCount);
+            StatusText = "未找到目录，已停止（避免全本读取）";
+            BookmarkGenerationStatus = "未找到目录或无法确认页码偏移";
+            MessageBox.Show(
+                "整本 PDF 中未找到目录页，或无法确认章节页码偏移，未生成书签。",
+                "PDFReader X",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
@@ -280,9 +274,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// 智能目录模式：按批往后读文本交给 AI 识别目录，读完目录后提示用户，
-    /// 再从目录之后定位前几个章节标题确认页码偏移，推算全本书签，不再把剩余页面交给 AI。
-    /// 无目录、目录输出异常或偏移无法确认时返回 false，由调用方回退全量读取。
+    /// 智能目录模式：每批 10 页轻量探测是否含目录，找到目录后再读完目录，
+    /// 并定位前几个章节标题确认页码偏移，推算全本书签。
+    /// 找不到目录或偏移无法确认时返回 false，不再回退全量读取。
     /// </summary>
     private async Task<bool> TryGenerateBookmarksSmartAsync(
         OpenAiCompatibleService service,
@@ -290,58 +284,79 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         int pageCount)
     {
         const int tocBatchPages = 10;
-        const int maxTocSearchPages = 50; // 前 50 页内没找到目录就回退全量读取
-        var frontTexts = new List<string>();
         try
         {
-            var searchLimit = Math.Min(maxTocSearchPages, pageCount);
-            for (var start = 0; start < searchLimit; start += tocBatchPages)
+            // 阶段一：逐批往后找目录，每批只发当前批，token 消耗恒定
+            var tocStart = -1;
+            for (var start = 0; start < pageCount; start += tocBatchPages)
             {
                 var count = Math.Min(tocBatchPages, pageCount - start);
-                SetGenerationStatus($"正在读取目录…（第 {FormatPageRange(start + 1, count)}）");
+                SetGenerationStatus($"正在找目录…（第 {FormatPageRange(start + 1, count)}）");
+                var batch = await Task.Run(() => ExtractPageTexts(document, start, count));
+                var isLastBatch = start + count >= pageCount;
+                var probe = await service.ProbeTocAsync(batch, start + 1, isLastBatch);
+                if (probe.HasToc)
+                {
+                    tocStart = start;
+                    break;
+                }
+                if (isLastBatch)
+                {
+                    return false; // 整本读完都没有目录
+                }
+            }
+            if (tocStart < 0)
+            {
+                return false;
+            }
+
+            // 阶段二：从目录所在批开始累积读完整目录
+            var frontTexts = new List<string>();
+            TocResult? toc = null;
+            for (var start = tocStart; start < pageCount; start += tocBatchPages)
+            {
+                var count = Math.Min(tocBatchPages, pageCount - start);
+                SetGenerationStatus($"正在读取目录…（第 {FormatPageRange(start + 1, count)}，条目较多时需等待片刻）");
                 var batch = await Task.Run(() => ExtractPageTexts(document, start, count));
                 frontTexts.AddRange(batch);
 
                 var isLastBatch = start + count >= pageCount;
-                var toc = await service.GenerateTocAsync(frontTexts, isLastBatch);
-                if (!toc.HasToc)
+                var result = await service.GenerateTocAsync(frontTexts, isLastBatch, firstPageNumber: tocStart + 1);
+                if (!result.HasToc)
+                {
+                    return false;
+                }
+                if (!result.TocComplete)
                 {
                     if (isLastBatch)
                     {
-                        return false; // 整本读完都没有目录
+                        toc = new TocResult { HasToc = true, TocComplete = true, Bookmarks = result.Bookmarks };
+                        break;
                     }
-                    continue; // 目录还没出现，继续往后读
+                    continue; // 目录还没读完，继续往后读
                 }
-                if (!toc.TocComplete)
-                {
-                    if (isLastBatch)
-                    {
-                        toc = new TocResult { HasToc = true, TocComplete = true, Bookmarks = toc.Bookmarks };
-                    }
-                    else
-                    {
-                        continue; // 目录还没读完，继续往后读
-                    }
-                }
-
-                SetGenerationStatus("目录读取成功，正在核对章节页码与 PDF 页码的偏移…");
-                var allTexts = await Task.Run(() => ExtractAllPageTexts(document, pageCount));
-                var offset = await Task.Run(() =>
-                    BookmarkLocator.ConfirmOffset(toc.Bookmarks, allTexts, frontTexts.Count));
-                if (offset is null)
-                {
-                    return false; // 无法确认偏移，回退全量
-                }
-
-                var bookmarks = BookmarkLocator.ShiftPages(toc.Bookmarks, offset.Value, pageCount);
-                ApplyBookmarkPreview(bookmarks, pageCount);
-                return true;
+                toc = result;
+                break;
             }
-            return false;
+            if (toc is null || toc.Bookmarks.Count == 0)
+            {
+                return false;
+            }
+
+            SetGenerationStatus("目录读取成功，正在核对章节页码与 PDF 页码的偏移…");
+            var offset = await ConfirmOffsetBatchedAsync(document, toc.Bookmarks, tocStart + frontTexts.Count, pageCount);
+            if (offset is null)
+            {
+                return false;
+            }
+
+            var bookmarks = BookmarkLocator.ShiftPages(toc.Bookmarks, offset.Value, pageCount);
+            ApplyBookmarkPreview(bookmarks, pageCount);
+            return true;
         }
         catch (LlmOutputTruncatedException)
         {
-            return false; // 目录输出异常，回退全量
+            return false;
         }
     }
 
@@ -349,22 +364,63 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private static string FormatPageRange(int startPage, int count) =>
         count <= 1 ? $"{startPage} 页" : $"{startPage}~{startPage + count - 1} 页";
 
-    /// <summary>提取全部页面文本（每页截断），供标题定位使用。</summary>
-    private static List<string> ExtractAllPageTexts(PdfRenderService document, int pageCount)
+    /// <summary>
+    /// 分批提取正文文本核对目录偏移：从目录之后按 40 页一批向后读，
+    /// 每批统计前几个章节标题的绝对页码偏移，累计票数 ≥2 且唯一时立即确认，
+    /// 避免为确认偏移而提取整本 PDF 的文本。
+    /// </summary>
+    private static async Task<int?> ConfirmOffsetBatchedAsync(
+        PdfRenderService document,
+        IReadOnlyList<LlmBookmark> bookmarks,
+        int searchStartPage,
+        int pageCount)
     {
-        const int maxCharsPerPage = 2000;
-        var texts = new List<string>(pageCount);
-        for (var i = 0; i < pageCount; i++)
+        const int batchPages = 40;
+        const int maxCheckedTitles = 10;
+        var counts = new Dictionary<int, int>();
+        var matchedTitles = new HashSet<string>();
+        var checkedTitles = 0;
+
+        for (var start = searchStartPage; start < pageCount; start += batchPages)
         {
-            var text = document.GetPageText(i) ?? string.Empty;
-            text = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-            if (text.Length > maxCharsPerPage)
+            var count = Math.Min(batchPages, pageCount - start);
+            var texts = await Task.Run(() => ExtractPageTexts(document, start, count));
+
+            foreach (var bookmark in bookmarks)
             {
-                text = text[..maxCharsPerPage];
+                if (checkedTitles >= maxCheckedTitles)
+                {
+                    break;
+                }
+                var normalizedTitle = NormalizeTitle(bookmark.Title);
+                if (normalizedTitle.Length == 0 || !matchedTitles.Add(normalizedTitle))
+                {
+                    continue;
+                }
+                checkedTitles++;
+                for (var localPage = 0; localPage < texts.Count; localPage++)
+                {
+                    if (NormalizeTitle(texts[localPage]).Contains(normalizedTitle, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var offset = start + localPage - bookmark.PageIndex;
+                        counts[offset] = counts.GetValueOrDefault(offset) + 1;
+                        break;
+                    }
+                }
             }
-            texts.Add(text);
+
+            var best = counts.OrderByDescending(pair => pair.Value).FirstOrDefault();
+            if (best.Value >= 2 && counts.Count(pair => pair.Value == best.Value) == 1)
+            {
+                return best.Key;
+            }
         }
-        return texts;
+        return null;
+    }
+
+    private static string NormalizeTitle(string text)
+    {
+        return string.Join(' ', (text ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).Trim();
     }
 
     /// <summary>扫描版 PDF：渲染页面图片，交给视觉模型识别生成书签。</summary>
@@ -402,64 +458,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // 视觉模式：30 页一批，最多 3 个请求并发，覆盖整本书
-        const int visionBatchPages = 30;
-        const int maxConcurrency = 3;
-        var batches = (pageCount + visionBatchPages - 1) / visionBatchPages;
-        var results = new List<LlmBookmark>[batches];
-        var completedBatches = 0;
-        using var gate = new SemaphoreSlim(maxConcurrency);
-        IProgress<string> progress = new Progress<string>(SetGenerationStatus);
-        var tasks = new List<Task>();
-        for (var batch = 0; batch < batches; batch++)
-        {
-            var index = batch;
-            var start = batch * visionBatchPages;
-            var count = Math.Min(visionBatchPages, pageCount - start);
-            tasks.Add(Task.Run(async () =>
-            {
-                await gate.WaitAsync();
-                try
-                {
-                    results[index] = await GenerateVisionBatchAsync(
-                        service, document, start, count, settings.VisionModel, progress);
-                    var done = Interlocked.Increment(ref completedBatches);
-                    progress.Report($"AI 看图生成书签：已完成 {done}/{batches} 批…");
-                }
-                finally
-                {
-                    gate.Release();
-                }
-            }));
-        }
-        await Task.WhenAll(tasks);
-
-        var bookmarks = new List<LlmBookmark>();
-        foreach (var result in results)
-        {
-            if (result is not null)
-            {
-                bookmarks.AddRange(result);
-            }
-        }
-        if (bookmarks.Count == 0)
-        {
-            StatusText = "AI 未能识别出有效书签";
-            MessageBox.Show(
-                "AI 未能从页面图片中识别出有效书签，请重试或检查视觉模型配置。",
-                "PDFReader X",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return;
-        }
-        ApplyBookmarkPreview(bookmarks, pageCount);
+        StatusText = "未找到目录，已停止（避免全本读取）";
+        BookmarkGenerationStatus = "未找到目录或无法确认页码偏移";
+        MessageBox.Show(
+            "整本 PDF 中未找到目录页，或无法确认章节页码偏移，未生成书签。",
+            "PDFReader X",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
     }
 
     /// <summary>
-    /// 扫描版智能目录模式：按批渲染少量页面图片，让视觉模型识别目录；
-    /// 目录读完后提示用户，再渲染目录之后的少量页面定位前几个章节的真实页码，
-    /// 确认偏移后推算全本书签，不再渲染剩余页面。
-    /// 无目录或无法确认偏移时返回 false，回退全本视觉识别。
+    /// 扫描版智能目录模式：每批 10 页轻量探测是否含目录，找到目录后再读完目录，
+    /// 并定位前几个章节标题确认页码偏移，推算全本书签。
+    /// 找不到目录或偏移无法确认时返回 false，不再回退全本视觉识别。
     /// </summary>
     private async Task<bool> TryGenerateBookmarksByVisionSmartAsync(
         OpenAiCompatibleService service,
@@ -467,34 +478,53 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         int pageCount)
     {
         const int tocBatchPages = 10;
-        const int maxTocSearchPages = 20; // 前 20 页内没找到目录就回退全本识别
-        var tocImages = new List<byte[]>();
-        TocResult? toc = null;
         try
         {
-            var searchLimit = Math.Min(maxTocSearchPages, pageCount);
-            for (var start = 0; start < searchLimit; start += tocBatchPages)
+            // 阶段一：逐批往后找目录，每批只发当前批，token 消耗恒定
+            var tocStart = -1;
+            for (var start = 0; start < pageCount; start += tocBatchPages)
             {
                 var count = Math.Min(tocBatchPages, pageCount - start);
-                SetGenerationStatus($"正在渲染并识别目录…（第 {FormatPageRange(start + 1, count)}）");
+                SetGenerationStatus($"正在找目录…（第 {FormatPageRange(start + 1, count)}）");
+                var images = await Task.Run(() => RenderPageImages(document, start, count));
+                var isLastBatch = start + count >= pageCount;
+                var probe = await service.ProbeVisionTocAsync(images, start + 1, isLastBatch);
+                if (probe.HasToc)
+                {
+                    tocStart = start;
+                    break;
+                }
+                if (isLastBatch)
+                {
+                    return false;
+                }
+            }
+            if (tocStart < 0)
+            {
+                return false;
+            }
+
+            // 阶段二：从目录所在批开始累积读完整目录
+            var tocImages = new List<byte[]>();
+            TocResult? toc = null;
+            for (var start = tocStart; start < pageCount; start += tocBatchPages)
+            {
+                var count = Math.Min(tocBatchPages, pageCount - start);
+                SetGenerationStatus($"正在读取目录…（第 {FormatPageRange(start + 1, count)}，条目较多时需等待片刻）");
                 var images = await Task.Run(() => RenderPageImages(document, start, count));
                 tocImages.AddRange(images);
 
                 var isLastBatch = start + count >= pageCount;
-                var result = await service.GenerateVisionTocAsync(tocImages, isLastBatch);
+                var result = await service.GenerateVisionTocAsync(tocImages, isLastBatch, firstPageNumber: tocStart + 1);
                 if (!result.HasToc)
                 {
-                    if (isLastBatch)
-                    {
-                        return false;
-                    }
-                    continue; // 目录还没出现，继续往后读
+                    return false;
                 }
                 if (!result.TocComplete)
                 {
                     if (isLastBatch)
                     {
-                        toc = result;
+                        toc = new TocResult { HasToc = true, TocComplete = true, Bookmarks = result.Bookmarks };
                         break;
                     }
                     continue; // 目录还没读完，继续往后读
@@ -508,10 +538,10 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
 
             SetGenerationStatus("目录读取成功，正在核对章节页码与 PDF 页码的偏移…");
-            var offset = await ConfirmVisionOffsetAsync(service, document, pageCount, toc, tocImages.Count);
+            var offset = await ConfirmVisionOffsetAsync(service, document, pageCount, toc, tocStart + tocImages.Count);
             if (offset is null)
             {
-                return false; // 无法确认偏移，回退全本识别
+                return false;
             }
 
             var bookmarks = BookmarkLocator.ShiftPages(toc.Bookmarks, offset.Value, pageCount);
@@ -554,7 +584,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 break;
             }
             var count = Math.Min(windowPages, pageCount - start);
-            var images = RenderPageImages(document, start, count);
+            var images = await Task.Run(() => RenderPageImages(document, start, count));
             var pages = await service.LocateChapterPagesAsync(chapters, images, start + 1);
             foreach (var page in pages)
             {
@@ -632,54 +662,6 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    /// <summary>文本批处理：AI 输出截断时自动拆半重试，直到成功。</summary>
-    private async Task<List<LlmBookmark>> GenerateTextBatchAsync(
-        OpenAiCompatibleService service,
-        PdfRenderService document,
-        int start,
-        int count)
-    {
-        try
-        {
-            var pageTexts = await Task.Run(() => ExtractPageTexts(document, start, count));
-            return await service.GenerateBookmarksAsync(pageTexts, start + 1);
-        }
-        catch (LlmOutputTruncatedException) when (count > 1)
-        {
-            var half = count / 2;
-            SetGenerationStatus($"输出过长，正在把第 {FormatPageRange(start + 1, count)} 拆成两组重试…");
-            var left = await GenerateTextBatchAsync(service, document, start, half);
-            var right = await GenerateTextBatchAsync(service, document, start + half, count - half);
-            left.AddRange(right);
-            return left;
-        }
-    }
-
-    /// <summary>视觉批处理：AI 输出截断时自动拆半重试，直到成功。</summary>
-    private static async Task<List<LlmBookmark>> GenerateVisionBatchAsync(
-        OpenAiCompatibleService service,
-        PdfRenderService document,
-        int start,
-        int count,
-        string visionModel,
-        IProgress<string> progress)
-    {
-        try
-        {
-            var images = await Task.Run(() => RenderPageImages(document, start, count, progress));
-            return await service.GenerateBookmarksFromImagesAsync(images, visionModel, start + 1);
-        }
-        catch (LlmOutputTruncatedException) when (count > 1)
-        {
-            var half = count / 2;
-            progress.Report($"输出过长，正在把第 {FormatPageRange(start + 1, count)} 拆成两组重试…");
-            var left = await GenerateVisionBatchAsync(service, document, start, half, visionModel, progress);
-            var right = await GenerateVisionBatchAsync(service, document, start + half, count - half, visionModel, progress);
-            left.AddRange(right);
-            return left;
-        }
-    }
-
     /// <summary>渲染指定页码范围（startIndex 起 count 页）为 PNG，供视觉模型识别。</summary>
     private static List<byte[]> RenderPageImages(
         PdfRenderService document,
@@ -734,22 +716,55 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     {
         var dialog = new OpenFileDialog
         {
-            Title = "打开 PDF 文件",
-            Filter = "PDF 文件 (*.pdf)|*.pdf|所有文件 (*.*)|*.*",
+            Title = "打开 PDF 或批注文档",
+            Filter = "PDF / 批注文档 (*.pdf;*.pdfrx)|*.pdf;*.pdfrx|PDF 文件 (*.pdf)|*.pdf|PDFReader X 批注 (*.pdfrx)|*.pdfrx",
         };
         if (dialog.ShowDialog() != true)
         {
             return;
         }
 
-        await OpenFileAsync(dialog.FileName);
+        if (Path.GetExtension(dialog.FileName).Equals(".pdfrx", StringComparison.OrdinalIgnoreCase))
+        {
+            await OpenPdfrxAsync(dialog.FileName);
+        }
+        else
+        {
+            await OpenFileAsync(dialog.FileName);
+        }
     }
+
+    /// <summary>当前文档关联的 .pdfrx 批注文件路径；普通 PDF 打开或另存前为 null。</summary>
+    public string? CurrentPdfrxPath { get; set; }
+
+    /// <summary>打开 .pdfrx 批注包完成、等待画布恢复时触发（携带包数据）。</summary>
+    public event Action<PdfrxPackage>? PdfrxReady;
+
+    /// <summary>文档加载完成（含书签、画布恢复）后触发，供界面重置修改标记。</summary>
+    public event Action? DocumentOpened;
 
     public async Task OpenFileAsync(string filePath)
     {
         try
         {
-            await LoadAsync(filePath);
+            var document = await Task.Run(() => PdfRenderService.Load(filePath));
+            var sessionFile = SessionStore.FindSession(filePath);
+            if (sessionFile is not null)
+            {
+                try
+                {
+                    var package = await Task.Run(() => PdfrxStore.Read(sessionFile));
+                    await LoadAsync(document, package.Bookmarks);
+                    PdfrxReady?.Invoke(package);
+                    StatusText = $"已恢复上次阅读位置与书签 · {Path.GetFileName(filePath)}";
+                    return;
+                }
+                catch
+                {
+                    // 会话包损坏时按普通 PDF 打开
+                }
+            }
+            await LoadAsync(document);
         }
         catch (Exception ex)
         {
@@ -762,18 +777,53 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private async Task LoadAsync(string filePath)
+    /// <summary>打开 .pdfrx 批注包：解包读取内嵌 PDF 与画布状态，加载后触发 PdfrxReady 供画布恢复。</summary>
+    public async Task OpenPdfrxAsync(string filePath)
+    {
+        try
+        {
+            StatusText = "正在读取批注文档…";
+            var package = await Task.Run(() => PdfrxStore.Read(filePath));
+            PdfRenderService document;
+            if (package.PdfBytes.Length > 0)
+            {
+                document = await Task.Run(() => PdfRenderService.Load(package.PdfBytes, Path.GetFileName(filePath)));
+            }
+            else if (package.PdfSource is { } sourcePath && File.Exists(sourcePath))
+            {
+                document = await Task.Run(() => PdfRenderService.Load(sourcePath));
+            }
+            else
+            {
+                throw new InvalidDataException("批注包内未包含 PDF 且无法定位源 PDF 文件");
+            }
+            await LoadAsync(document, package.Bookmarks);
+            CurrentPdfrxPath = filePath;
+            PdfrxReady?.Invoke(package);
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"打开失败：{ex.Message}";
+            MessageBox.Show(
+                $"无法打开批注文档：\n{ex.Message}",
+                "PDFReader X",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private async Task LoadAsync(PdfRenderService document, IReadOnlyList<BookmarkData>? embeddedBookmarks = null)
     {
         IsBusy = true;
         try
         {
             StatusText = "正在加载 PDF…";
-            var document = await Task.Run(() => PdfRenderService.Load(filePath));
+            CurrentPdfrxPath = null;
             CloseDocument();
             Document = document;
 
             HasDocument = true;
-            FileName = Path.GetFileName(filePath);
+            FileName = Path.GetFileName(document.FilePath);
             Zoom = 1.0;
             StatusText = "正在创建页面…";
 
@@ -792,23 +842,34 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 }
             }
 
-            // 书签目录：后台读取，避免大 PDF 卡住 UI
-            try
+            // 书签目录：.pdfrx 包内书签优先，否则后台读取 PDF 大纲，避免大 PDF 卡住 UI
+            if (embeddedBookmarks is not null)
             {
-                var outline = await Task.Run(() => document.GetOutline());
-                foreach (var node in outline)
+                foreach (var data in embeddedBookmarks)
                 {
-                    Bookmarks.Add(BookmarkViewModel.FromCore(node));
+                    Bookmarks.Add(ToBookmarkViewModel(data));
                 }
             }
-            catch
+            else
             {
-                // 个别 PDF 大纲读取失败不影响打开
+                try
+                {
+                    var outline = await Task.Run(() => document.GetOutline());
+                    foreach (var node in outline)
+                    {
+                        Bookmarks.Add(BookmarkViewModel.FromCore(node));
+                    }
+                }
+                catch
+                {
+                    // 个别 PDF 大纲读取失败不影响打开
+                }
             }
 
             StartThumbnailGeneration(document);
 
-            StatusText = $"已加载 {document.PageCount} 页 · {Path.GetFileName(filePath)}";
+            StatusText = $"已加载 {document.PageCount} 页 · {Path.GetFileName(document.FilePath)}";
+            DocumentOpened?.Invoke();
         }
         finally
         {
@@ -879,6 +940,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 await Task.Delay(1); // 让出 CPU，保持 UI 流畅
             }
         }
+    }
+
+    private static BookmarkViewModel ToBookmarkViewModel(BookmarkData data)
+    {
+        var viewModel = new BookmarkViewModel(data.Title, data.PageIndex);
+        foreach (var child in data.Children)
+        {
+            viewModel.Children.Add(ToBookmarkViewModel(child));
+        }
+        return viewModel;
     }
 
     private void Close()

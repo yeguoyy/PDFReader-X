@@ -46,6 +46,7 @@ public sealed class OpenAiCompatibleService
             temperature = 0.2,
             enable_thinking = false,
             max_tokens = 8192,
+            response_format = new { type = "json_object" },
             messages = new object[]
             {
                 new { role = "system", content = SystemPrompt },
@@ -97,6 +98,142 @@ public sealed class OpenAiCompatibleService
     }
 
     /// <summary>
+    /// 轻量目录探测（文本）：只判断当前批次页面是否包含目录页，不生成书签，
+    /// 用于逐批往后找目录，降低 token 消耗。
+    /// </summary>
+    public async Task<TocResult> ProbeTocAsync(
+        IReadOnlyList<string> pageTexts,
+        int firstPageNumber,
+        bool isLastBatch,
+        CancellationToken cancellationToken = default)
+    {
+        if (pageTexts.Count == 0)
+        {
+            return new TocResult { HasToc = false };
+        }
+
+        var userContent = BuildTocProbePrompt(firstPageNumber, pageTexts.Count)
+            + (isLastBatch ? "\n注意：以上已经是 PDF 的最后几页。" : "");
+        var payload = new
+        {
+            model = _settings.Model,
+            temperature = 0.2,
+            enable_thinking = false,
+            max_tokens = 256,
+            response_format = new { type = "json_object" },
+            messages = new object[]
+            {
+                new { role = "system", content = TocProbePrompt },
+                new { role = "user", content = userContent },
+            },
+        };
+
+        var url = _settings.Endpoint.TrimEnd('/') + "/chat/completions";
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"),
+        };
+        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"LLM 接口返回 {(int)response.StatusCode}：{Truncate(body, 300)}");
+        }
+
+        using var json = JsonDocument.Parse(body);
+        if (!json.RootElement.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
+        {
+            throw new InvalidOperationException("LLM 返回中没有 choices 字段");
+        }
+        var contentText = choices[0]
+            .GetProperty("message")
+            .GetProperty("content")
+            .GetString();
+        if (string.IsNullOrWhiteSpace(contentText))
+        {
+            throw new InvalidOperationException("LLM 返回内容为空");
+        }
+        return ParseTocProbe(contentText);
+    }
+
+    /// <summary>
+    /// 轻量目录探测（视觉）：只判断当前批次页面是否包含目录页，不生成书签，
+    /// 用于逐批往后找目录，降低 token 消耗。
+    /// </summary>
+    public async Task<TocResult> ProbeVisionTocAsync(
+        IReadOnlyList<byte[]> pageImages,
+        int firstPageNumber,
+        bool isLastBatch,
+        CancellationToken cancellationToken = default)
+    {
+        if (pageImages.Count == 0)
+        {
+            return new TocResult { HasToc = false };
+        }
+
+        var contentItems = new List<object>(pageImages.Count + 1);
+        foreach (var image in pageImages)
+        {
+            contentItems.Add(new
+            {
+                type = "image_url",
+                image_url = new { url = "data:image/png;base64," + Convert.ToBase64String(image) },
+            });
+        }
+        var pageLabel = pageImages.Count > 1
+            ? $"{firstPageNumber}~{firstPageNumber + pageImages.Count - 1}"
+            : $"{firstPageNumber}";
+        contentItems.Add(new
+        {
+            type = "text",
+            text = $"这批图片对应 PDF 第 {pageLabel} 页（可能位于书的中间部分，不一定有目录）。"
+                + (isLastBatch ? "\n注意：以上已经是 PDF 的最后几页。" : ""),
+        });
+
+        var payload = new
+        {
+            model = _settings.VisionModel,
+            enable_thinking = false,
+            max_tokens = 256,
+            response_format = new { type = "json_object" },
+            messages = new object[]
+            {
+                new { role = "system", content = VisionTocProbePrompt },
+                new { role = "user", content = contentItems },
+            },
+        };
+
+        var url = _settings.Endpoint.TrimEnd('/') + "/chat/completions";
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"),
+        };
+        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"LLM 接口返回 {(int)response.StatusCode}：{Truncate(body, 300)}");
+        }
+
+        using var json = JsonDocument.Parse(body);
+        if (!json.RootElement.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
+        {
+            throw new InvalidOperationException("LLM 返回中没有 choices 字段");
+        }
+        var contentText = choices[0]
+            .GetProperty("message")
+            .GetProperty("content")
+            .GetString();
+        if (string.IsNullOrWhiteSpace(contentText))
+        {
+            throw new InvalidOperationException("LLM 返回内容为空");
+        }
+        return ParseTocProbe(contentText);
+    }
+
+    /// <summary>
     /// 目录识别模式：读取 PDF 前若干页文本，判断是否有目录并提取目录书签树（书本页码）。
     /// 调用方分批传入文本，用 isLastBatch 告知是否已读到 PDF 末尾。
     /// 目录输出过长被截断时，自动携带已保存的条目续传剩余部分（分批传回）。
@@ -105,6 +242,7 @@ public sealed class OpenAiCompatibleService
     public async Task<TocResult> GenerateTocAsync(
         IReadOnlyList<string> frontPageTexts,
         bool isLastBatch,
+        int firstPageNumber = 1,
         CancellationToken cancellationToken = default)
     {
         if (frontPageTexts.Count == 0)
@@ -117,7 +255,7 @@ public sealed class OpenAiCompatibleService
         for (var round = 0; round < maxRounds; round++)
         {
             var (contentText, truncated) = await PostTocRequestAsync(
-                frontPageTexts, isLastBatch, savedBookmarks, cancellationToken).ConfigureAwait(false);
+                frontPageTexts, isLastBatch, firstPageNumber, savedBookmarks, cancellationToken).ConfigureAwait(false);
 
             if (truncated)
             {
@@ -175,18 +313,21 @@ public sealed class OpenAiCompatibleService
     private async Task<(string ContentText, bool Truncated)> PostTocRequestAsync(
         IReadOnlyList<string> frontPageTexts,
         bool isLastBatch,
+        int firstPageNumber,
         IReadOnlyList<LlmBookmark> savedBookmarks,
         CancellationToken cancellationToken)
     {
+        // 续传时不再重发整批文本，只携带已保存条目，减少 token 与耗时
         var userContent = savedBookmarks.Count == 0
-            ? BuildPrompt(frontPageTexts, 1) + (isLastBatch ? "\n注意：以上已经是 PDF 的最后几页。" : "")
-            : BuildPrompt(frontPageTexts, 1) + "\n\n" + BuildContinuationPrompt(savedBookmarks);
+            ? BuildPrompt(frontPageTexts, firstPageNumber) + (isLastBatch ? "\n注意：以上已经是 PDF 的最后几页。" : "")
+            : BuildContinuationPrompt(savedBookmarks);
         var payload = new
         {
             model = _settings.Model,
             temperature = 0.2,
             enable_thinking = false,
             max_tokens = 8192,
+            response_format = new { type = "json_object" },
             messages = new object[]
             {
                 new { role = "system", content = TocPrompt },
@@ -275,6 +416,32 @@ public sealed class OpenAiCompatibleService
         return new TocResult { HasToc = true, TocComplete = tocComplete, Bookmarks = nodes };
     }
 
+    /// <summary>解析轻量探测结果：只关心是否包含目录页，书签字段可省略。</summary>
+    private static TocResult ParseTocProbe(string text)
+    {
+        try
+        {
+            using var root = JsonDocument.Parse(ExtractJson(text));
+            if (root.RootElement.TryGetProperty("hasToc", out var hasToc)
+                && hasToc.ValueKind == JsonValueKind.True)
+            {
+                return new TocResult { HasToc = true };
+            }
+            return new TocResult { HasToc = false };
+        }
+        catch
+        {
+            // 模型未按要求输出 JSON 时，尝试从文本中提取 hasToc 字段
+            var match = System.Text.RegularExpressions.Regex.Match(
+                text, "\"hasToc\"\\s*:\\s*(true|false)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match.Success && match.Groups[1].Value.Equals("true", StringComparison.OrdinalIgnoreCase))
+            {
+                return new TocResult { HasToc = true };
+            }
+            return new TocResult { HasToc = false };
+        }
+    }
+
     /// <summary>
     /// 视觉模式：把页面图片发给视觉模型，识别标题/目录生成书签。
     /// 用于扫描版 PDF（无法提取文本）。
@@ -306,6 +473,7 @@ public sealed class OpenAiCompatibleService
             model = visionModel,
             enable_thinking = false,
             max_tokens = 8192,
+            response_format = new { type = "json_object" },
             messages = new object[]
             {
                 new { role = "system", content = SystemPrompt },
@@ -362,6 +530,7 @@ public sealed class OpenAiCompatibleService
     public async Task<TocResult> GenerateVisionTocAsync(
         IReadOnlyList<byte[]> pageImages,
         bool isLastBatch,
+        int firstPageNumber = 1,
         CancellationToken cancellationToken = default)
     {
         if (pageImages.Count == 0)
@@ -374,7 +543,7 @@ public sealed class OpenAiCompatibleService
         for (var round = 0; round < maxRounds; round++)
         {
             var (contentText, truncated) = await PostVisionTocRequestAsync(
-                pageImages, isLastBatch, savedBookmarks, cancellationToken).ConfigureAwait(false);
+                pageImages, isLastBatch, firstPageNumber, savedBookmarks, cancellationToken).ConfigureAwait(false);
 
             if (truncated)
             {
@@ -431,31 +600,39 @@ public sealed class OpenAiCompatibleService
     private async Task<(string ContentText, bool Truncated)> PostVisionTocRequestAsync(
         IReadOnlyList<byte[]> pageImages,
         bool isLastBatch,
+        int firstPageNumber,
         IReadOnlyList<LlmBookmark> savedBookmarks,
         CancellationToken cancellationToken)
     {
-        var contentItems = new List<object>(pageImages.Count + 1);
-        foreach (var image in pageImages)
+        // 续传时不再重发图片，只携带已保存条目，避免每轮等待重传 10 张图
+        var contentItems = new List<object>();
+        if (savedBookmarks.Count > 0)
         {
+            contentItems.Add(new { type = "text", text = BuildContinuationPrompt(savedBookmarks) });
+        }
+        else
+        {
+            foreach (var image in pageImages)
+            {
+                contentItems.Add(new
+                {
+                    type = "image_url",
+                    image_url = new { url = "data:image/png;base64," + Convert.ToBase64String(image) },
+                });
+            }
             contentItems.Add(new
             {
-                type = "image_url",
-                image_url = new { url = "data:image/png;base64," + Convert.ToBase64String(image) },
+                type = "text",
+                text = BuildVisionTocPrompt(pageImages.Count, firstPageNumber) + (isLastBatch ? "\n注意：以上已经是 PDF 的最后几页。" : ""),
             });
         }
-        contentItems.Add(new
-        {
-            type = "text",
-            text = savedBookmarks.Count == 0
-                ? BuildVisionTocPrompt(pageImages.Count) + (isLastBatch ? "\n注意：以上已经是 PDF 的最后几页。" : "")
-                : BuildContinuationPrompt(savedBookmarks),
-        });
 
         var payload = new
         {
             model = _settings.VisionModel,
             enable_thinking = false,
             max_tokens = 8192,
+            response_format = new { type = "json_object" },
             messages = new object[]
             {
                 new { role = "system", content = TocPrompt },
@@ -527,6 +704,7 @@ public sealed class OpenAiCompatibleService
             model = _settings.VisionModel,
             enable_thinking = false,
             max_tokens = 2048,
+            response_format = new { type = "json_object" },
             messages = new object[]
             {
                 new { role = "system", content = "你是 PDF 章节页码定位助手，只输出 JSON，不要输出任何其他文字。" },
@@ -591,10 +769,13 @@ public sealed class OpenAiCompatibleService
     }
 
     /// <summary>构造视觉目录识别提示（含 tocComplete 判断）。</summary>
-    private static string BuildVisionTocPrompt(int pageCount)
+    private static string BuildVisionTocPrompt(int pageCount, int firstPageNumber)
     {
+        var pageLabel = pageCount > 1
+            ? $"{firstPageNumber}~{firstPageNumber + pageCount - 1}"
+            : $"{firstPageNumber}";
         return
-            "你是 PDF 目录识别助手。用户提供了 PDF 前若干页的页面图片（按顺序，共 " + pageCount + " 张）。\n" +
+            "你是 PDF 目录识别助手。用户提供 PDF 中连续若干页的页面图片（按顺序，共 " + pageCount + " 张，对应 PDF 第 " + pageLabel + " 页）。\n" +
             "1. 判断这些页里是否包含目录页（出现\"目录\"、\"目 录\"、\"Contents\"、\"Table of Contents\"等字样）。\n" +
             "2. 有目录：提取目前能看到的所有目录条目，保留层级（子条目放 children），页码为目录中标注的书本页码（从 1 开始的正整数）。同时判断目录是否已经完整读完：\n" +
             "   - 如果最后一页底部仍在继续列出目录条目、明显还有后续目录页，tocComplete=false；\n" +
@@ -850,10 +1031,34 @@ public sealed class OpenAiCompatibleService
         return sb.ToString();
     }
 
+    private static string BuildTocProbePrompt(int firstPageNumber, int pageCount)
+    {
+        var pageLabel = pageCount > 1
+            ? $"{firstPageNumber}~{firstPageNumber + pageCount - 1}"
+            : $"{firstPageNumber}";
+        return $"以下是 PDF 第 {pageLabel} 页的文本（这批页面可能位于书的中间部分）。\n";
+    }
+
     private static string Truncate(string text, int maxLength)
     {
         return text.Length <= maxLength ? text : text[..maxLength] + "…";
     }
+
+    private const string TocProbePrompt = """
+你是 PDF 目录探测助手。用户提供的是 PDF 中连续若干页的文本，这批页面可能位于书的开头、中间或结尾。
+请只判断这批页面中是否包含目录页（出现"目录"、"目 录"、"Contents"、"Table of Contents"等字样）。
+- 若包含目录页：输出 {"hasToc":true}
+- 若不包含目录页：输出 {"hasToc":false}
+不要生成书签，不要输出任何其他文字，只输出 JSON。
+""";
+
+    private const string VisionTocProbePrompt = """
+你是 PDF 目录探测助手。用户提供 PDF 中连续若干页的页面截图，这批页面可能位于书的开头、中间或结尾。
+请只判断这批页面中是否包含目录页（出现"目录"、"目 录"、"Contents"、"Table of Contents"等字样）。
+- 若包含目录页：输出 {"hasToc":true}
+- 若不包含目录页：输出 {"hasToc":false}
+不要生成书签，不要输出任何其他文字，只输出 JSON。
+""";
 
     private const string TocPrompt = """
 你是 PDF 目录识别助手。用户提供 PDF 前若干页的文本（按顺序）。

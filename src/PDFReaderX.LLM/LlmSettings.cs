@@ -10,7 +10,7 @@ public sealed class LlmSettings
     public string ApiKey { get; set; } = string.Empty;
 
     /// <summary>文本模型名称。</summary>
-    public string Model { get; set; } = "qwen3.7-flash-2026-07-15";
+    public string Model { get; set; } = "deepseek-v4-flash-0731";
 
     /// <summary>视觉模型名称（扫描版 PDF 看图生成书签时使用）。</summary>
     public string VisionModel { get; set; } = "qwen3.7-flash-2026-07-15";
