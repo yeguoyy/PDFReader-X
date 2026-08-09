@@ -2,7 +2,7 @@
 ; 用法: 安装 Inno Setup 6 后运行 scripts\publish.ps1 dist
 
 #define MyAppName "PDFReader X"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "1.0.0"
 #define MyAppExeName "PDFReaderX.App.exe"
 #define MyAppPublisher "PDFReaderX"
 
@@ -14,7 +14,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=..\dist\installer
-OutputBaseFilename=PDFReaderX-Setup
+OutputBaseFilename=PDFReaderX-Setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -34,3 +34,5 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+
