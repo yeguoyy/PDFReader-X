@@ -257,13 +257,13 @@ PDFReaderX.sln
 - 元素选择器（点击选中图片/文本框，显示调整手柄）→ 已实现：选择工具点击选中显示虚线框 + 右下角缩放手柄，可拖动移动
 - 简单的撤销/重做 → 已实现：墨迹笔划 / 橡皮擦 / 元素增删 / 移动 / 缩放统一记录，Ctrl+Z / Ctrl+Y / 工具栏按钮
 
-### Phase 6：持久化 + 打磨
-- .pdfrx 包读写（ZIP 打包/解包，所有 JSON + 墨迹 ISF + 图片）
-- 打开 .pdfrx → 恢复完整画布状态
-- 套索选择（圈选墨迹）
-- 性能优化：大量笔划场景不卡顿
-- 导出：墨迹+元素导出为 PDF 注释 / 合并渲染为新的 PDF
-- 要求：保存书签记录
+### Phase 6：持久化 + 打磨—— ✅ 已完成
+- .pdfrx 包读写（ZIP 打包/解包，所有 JSON + 墨迹 ISF + 图片）→ 已实现：PdfrxStore（manifest.json / canvas.json / bookmarks.json / ink/*.isf / images/* / pdf/original.pdf）
+- 打开 .pdfrx → 恢复完整画布状态 → 已实现：内存加载内嵌 PDF（PdfRenderService.Load(byte[])），恢复页面墨迹、自由墨迹、文本框、图片、缩放与平移（InfiniteCanvas.RestoreFromPackage）
+- 套索选择（圈选墨迹）→ 已实现：InkTool.Lasso 使用 InkCanvas 内置 Select 模式，Delete 删除选中笔划并记录撤销
+- 性能优化：大量笔划场景不卡顿 → 已具备：页面按需渲染 + LRU 缓存 + 后台线程，墨迹按页独立 StrokeCollection
+- 导出：墨迹+元素导出为 PDF 注释 / 合并渲染为新的 PDF → 已实现：PdfExportService + PdfSharp 合并渲染（150 DPI），页面墨迹 / 自由墨迹 / 文本框 / 图片裁剪到页面范围导出
+- 要求：保存书签记录 → 已实现：书签树随 .pdfrx 保存（bookmarks.json），打开时优先恢复包内书签
 
 ---
 

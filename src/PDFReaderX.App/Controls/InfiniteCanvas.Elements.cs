@@ -2,10 +2,12 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Ink;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using PDFReaderX.App.Models;
 using PDFReaderX.Core.Utilities;
 
 namespace PDFReaderX.App.Controls;
@@ -27,6 +29,7 @@ public partial class InfiniteCanvas
         public FontStyle Style = FontStyles.Normal;
         public TextDecorationCollection? Decorations;
         public BitmapSource? ImageSource;
+        public Color Color = Colors.Black; // 文本颜色（随元素保存，.pdfrx 持久化用）
         public double WorldX;
         public double WorldY;
         public double WorldWidth;
@@ -157,6 +160,7 @@ public partial class InfiniteCanvas
             WorldY = world.Y,
             WorldWidth = 240,
             WorldHeight = 44,
+            Color = PenColor,
         };
         element.Root.Children.Add(element.Content); // 把输入框加入容器（缺失会导致输入框不显示、无法聚焦）
         ApplyTextEditBorder(element.Root);
@@ -600,7 +604,7 @@ public partial class InfiniteCanvas
             FontWeight = format?.Weight ?? FontWeights.Normal,
             FontStyle = format?.Style ?? FontStyles.Normal,
             TextDecorations = format?.Decorations,
-            Foreground = new SolidColorBrush(PenColor),
+            Foreground = new SolidColorBrush(format?.Color ?? PenColor),
             Background = Brushes.White,
             BorderThickness = new Thickness(0),
             Padding = new Thickness(4),
@@ -967,6 +971,7 @@ public partial class InfiniteCanvas
         element.Weight = textBox.FontWeight;
         element.Style = textBox.FontStyle;
         element.Decorations = textBox.TextDecorations;
+        element.Color = ((SolidColorBrush)textBox.Foreground).Color;
 
         if (string.IsNullOrWhiteSpace(newText))
         {
@@ -1065,7 +1070,7 @@ public partial class InfiniteCanvas
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(4), // 与编辑时 TextBox 的内边距一致，避免提交后文字偏移
-            Foreground = new SolidColorBrush(PenColor),
+            Foreground = new SolidColorBrush(element.Color),
         };
         block.Measure(new Size(Math.Max(1, width - 8), double.PositiveInfinity));
         var contentHeight = Math.Max(20, block.DesiredSize.Height + 8);
@@ -1080,5 +1085,187 @@ public partial class InfiniteCanvas
         element.Content = block;
         UpdateElementLayout(element);
         UpdateSelectionAdorner();
+    }
+
+    // ---------- .pdfrx 持久化 ----------
+
+    /// <summary>导出全部元素与图片字节（图片文件名对应 images/ 包内路径）。</summary>
+    public (List<CanvasElementData> Elements, Dictionary<string, byte[]> Images) ExportElements()
+    {
+        var elements = new List<CanvasElementData>();
+        var images = new Dictionary<string, byte[]>();
+        var imageCounter = 0;
+        foreach (var element in _elements)
+        {
+            if (element.IsText)
+            {
+                elements.Add(new CanvasElementData
+                {
+                    Type = "text",
+                    Text = element.Text,
+                    X = element.WorldX,
+                    Y = element.WorldY,
+                    Width = element.WorldWidth,
+                    Height = element.WorldHeight,
+                    FontSize = element.FontSize,
+                    Bold = element.Weight == FontWeights.Bold,
+                    Italic = element.Style == FontStyles.Italic,
+                    Underline = element.Decorations is { Count: > 0 },
+                    Color = element.Color.ToString(),
+                });
+            }
+            else if (element.ImageSource is not null)
+            {
+                var fileName = $"img_{imageCounter++:d3}.png";
+                images[fileName] = EncodePng(element.ImageSource);
+                elements.Add(new CanvasElementData
+                {
+                    Type = "image",
+                    ImageFile = fileName,
+                    X = element.WorldX,
+                    Y = element.WorldY,
+                    Width = element.WorldWidth,
+                    Height = element.WorldHeight,
+                });
+            }
+        }
+        return (elements, images);
+    }
+
+    /// <summary>导出指定页墨迹（ISF 字节），无墨迹返回 null。</summary>
+    public byte[]? ExportPageInk(int pageIndex)
+    {
+        if (!_inkCanvases.TryGetValue(pageIndex, out var ink) || ink.Strokes.Count == 0)
+        {
+            return null;
+        }
+        using var stream = new MemoryStream();
+        ink.Strokes.Save(stream);
+        return stream.ToArray();
+    }
+
+    /// <summary>导出自由画布墨迹（ISF 字节），无墨迹返回 null。</summary>
+    public byte[]? ExportFreeInk()
+    {
+        if (_freeInk is null || _freeInk.Strokes.Count == 0)
+        {
+            return null;
+        }
+        using var stream = new MemoryStream();
+        _freeInk.Strokes.Save(stream);
+        return stream.ToArray();
+    }
+
+    /// <summary>恢复 .pdfrx 包中的完整画布状态：墨迹、元素、缩放与平移。</summary>
+    public void RestoreFromPackage(PdfrxPackage package)
+    {
+        ClearElements();
+
+        foreach (var (index, bytes) in package.PageInks)
+        {
+            if (_inkCanvases.TryGetValue(index, out var ink))
+            {
+                ink.Strokes = LoadStrokes(bytes);
+            }
+        }
+        if (package.FreeInk is not null && _freeInk is not null)
+        {
+            _freeInk.Strokes = LoadStrokes(package.FreeInk);
+        }
+
+        foreach (var data in package.Elements)
+        {
+            ImportElement(data, package.Images);
+        }
+
+        Zoom = package.Zoom;
+        _pan = new Point(package.PanX, package.PanY);
+        UpdatePanTransform();
+        UpdateCurrentPage();
+        UpdateScrollState();
+        ScheduleRerender();
+        ResetModified();
+    }
+
+    private static StrokeCollection LoadStrokes(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        return new StrokeCollection(stream);
+    }
+
+    private void ImportElement(CanvasElementData data, IReadOnlyDictionary<string, byte[]> images)
+    {
+        if (data.Type == "image" && data.ImageFile is not null && images.TryGetValue(data.ImageFile, out var imageBytes))
+        {
+            var source = LoadBitmap(imageBytes);
+            var image = new Image { Source = source, Stretch = Stretch.Uniform };
+            var element = new CanvasElement
+            {
+                Root = CreateElementRoot(Math.Max(40, data.Width), Math.Max(28, data.Height)),
+                Content = image,
+                ImageSource = source,
+                WorldX = data.X,
+                WorldY = data.Y,
+                WorldWidth = Math.Max(40, data.Width),
+                WorldHeight = Math.Max(28, data.Height),
+            };
+            element.Root.Children.Add(image);
+            AddElementInternal(element);
+            return;
+        }
+
+        if (data.Type == "text")
+        {
+            var element = new CanvasElement
+            {
+                Root = CreateElementRoot(Math.Max(40, data.Width), Math.Max(28, data.Height)),
+                Content = new TextBlock(),
+                IsText = true,
+                Text = data.Text ?? string.Empty,
+                FontSize = data.FontSize > 0 ? data.FontSize : DefaultTextFontSize,
+                Weight = data.Bold ? FontWeights.Bold : FontWeights.Normal,
+                Style = data.Italic ? FontStyles.Italic : FontStyles.Normal,
+                Decorations = data.Underline ? TextDecorations.Underline : null,
+                Color = ParseColor(data.Color),
+                WorldX = data.X,
+                WorldY = data.Y,
+                WorldWidth = Math.Max(40, data.Width),
+                WorldHeight = Math.Max(28, data.Height),
+            };
+            SetTextContent(element, element.Text);
+            AddElementInternal(element);
+        }
+    }
+
+    private static BitmapSource LoadBitmap(byte[] bytes)
+    {
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.StreamSource = new MemoryStream(bytes);
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    private static byte[] EncodePng(BitmapSource source)
+    {
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(source));
+        using var stream = new MemoryStream();
+        encoder.Save(stream);
+        return stream.ToArray();
+    }
+
+    private static Color ParseColor(string value)
+    {
+        try
+        {
+            return (Color)ColorConverter.ConvertFromString(value);
+        }
+        catch
+        {
+            return Colors.Black;
+        }
     }
 }

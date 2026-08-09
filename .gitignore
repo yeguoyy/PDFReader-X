@@ -1,9 +1,11 @@
-bin/
+﻿bin/
 obj/
 *.user
 *.suo
 .vs/
 .idea/
 samples/*.pdf
-
+samples/*.pdfrx
+backup-*.patch
+tmp-render/
 dist/

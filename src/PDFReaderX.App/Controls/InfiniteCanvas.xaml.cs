@@ -196,6 +196,12 @@ public partial class InfiniteCanvas : UserControl
     }
 
     /// <summary>垂直滚动偏移：内容顶部相对视口顶部的距离（即 -_pan.Y）。</summary>
+    /// <summary>画布水平平移量（世界坐标偏移，供 .pdfrx 保存）。</summary>
+    public double PanX => _pan.X;
+
+    /// <summary>画布垂直平移量（世界坐标偏移，供 .pdfrx 保存）。</summary>
+    public double PanY => _pan.Y;
+
     public double ScrollOffset
     {
         get => (double)GetValue(ScrollOffsetProperty);
@@ -290,6 +296,7 @@ public partial class InfiniteCanvas : UserControl
         if (CurrentPageIndex != index)
         {
             CurrentPageIndex = index;
+            MarkModified();
         }
     }
 
@@ -382,6 +389,7 @@ public partial class InfiniteCanvas : UserControl
         {
             InkTool.Select => Cursors.Hand,
             InkTool.Text => Cursors.IBeam,
+            InkTool.Lasso => Cursors.Cross,
             _ => Cursors.Arrow,
         };
     }
@@ -508,6 +516,7 @@ public partial class InfiniteCanvas : UserControl
     /// <summary>平移总量 = 手动平移 + 文档居中偏移，统一各调用点。</summary>
     private void UpdatePanTransform()
     {
+        MarkModified();
         PanTransform.X = _pan.X + _docOffsetX;
         PanTransform.Y = _pan.Y;
     }
@@ -973,6 +982,143 @@ public partial class InfiniteCanvas : UserControl
         e.Handled = true;
     }
 
+    /// <summary>是否有套索选中的墨迹笔划。</summary>
+    public bool HasSelectedInk =>
+        _inkCanvases.Values.Any(ink => ink.GetSelectedStrokes().Count > 0)
+        || (_freeInk is not null && _freeInk.GetSelectedStrokes().Count > 0);
+
+    /// <summary>删除所有被套索选中的墨迹笔划（记录撤销）。</summary>
+    public void DeleteSelectedInk()
+    {
+        foreach (var ink in _inkCanvases.Values)
+        {
+            DeleteSelectedStrokes(ink);
+        }
+        if (_freeInk is not null)
+        {
+            DeleteSelectedStrokes(_freeInk);
+        }
+    }
+
+    private void DeleteSelectedStrokes(InkCanvas ink)
+    {
+        var selected = ink.GetSelectedStrokes().ToList();
+        var strokes = ink.Strokes;
+        foreach (var stroke in selected)
+        {
+            RecordUndo(
+                undo: () => strokes.Remove(stroke),
+                redo: () => strokes.Add(stroke));
+            strokes.Remove(stroke);
+        }
+    }
+
+    // ---------- 导出渲染 ----------
+
+    /// <summary>把某页 PDF 位图与页面墨迹、自由墨迹、元素合并渲染（导出 PDF 用）。</summary>
+    public BitmapSource RenderPageWithAnnotations(int pageIndex, BitmapSource basePage, double dpi)
+    {
+        var width = basePage.PixelWidth;
+        var height = basePage.PixelHeight;
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen())
+        {
+            dc.DrawImage(basePage, new Rect(0, 0, width, height));
+
+            var scale = dpi / 96.0; // 墨迹/元素是世界 DIP 坐标，位图是 dpi 像素
+            dc.PushTransform(new ScaleTransform(scale, scale));
+
+            var pageWidth = 0.0;
+            var pageHeight = 0.0;
+            if (Pages is not null && pageIndex >= 0 && pageIndex < Pages.Count)
+            {
+                pageWidth = Pages[pageIndex].BaseWidth;
+                pageHeight = Pages[pageIndex].BaseHeight;
+            }
+            var pageTop = GetPageWorldY(pageIndex);
+            dc.PushClip(new RectangleGeometry(new Rect(0, pageTop, pageWidth, pageHeight)));
+
+            if (_inkCanvases.TryGetValue(pageIndex, out var ink))
+            {
+                DrawStrokes(dc, ink.Strokes);
+            }
+            if (_freeInk is not null)
+            {
+                DrawStrokes(dc, _freeInk.Strokes);
+            }
+            foreach (var element in _elements)
+            {
+                DrawElement(dc, element);
+            }
+
+            dc.Pop();
+            dc.Pop();
+        }
+
+        var renderTarget = new RenderTargetBitmap(width, height, dpi, dpi, PixelFormats.Pbgra32);
+        renderTarget.Render(visual);
+        renderTarget.Freeze();
+        return renderTarget;
+    }
+
+    /// <summary>页面 i 顶部在画布世界坐标中的 Y（连续垂直排列，页距 0）。</summary>
+    private double GetPageWorldY(int pageIndex)
+    {
+        if (Pages is null)
+        {
+            return 0;
+        }
+        var y = 0.0;
+        for (var i = 0; i < pageIndex && i < Pages.Count; i++)
+        {
+            y += Pages[i].BaseHeight;
+        }
+        return y;
+    }
+
+    private static void DrawStrokes(DrawingContext dc, StrokeCollection strokes)
+    {
+        foreach (var stroke in strokes)
+        {
+            var geometry = stroke.GetGeometry();
+            var brush = new SolidColorBrush(stroke.DrawingAttributes.Color);
+            brush.Freeze();
+            dc.DrawGeometry(brush, null, geometry);
+        }
+    }
+
+    private static void DrawElement(DrawingContext dc, CanvasElement element)
+    {
+        if (element.IsText)
+        {
+            var width = Math.Max(1, element.WorldWidth - 8);
+            var block = new TextBlock
+            {
+                Text = element.Text,
+                FontSize = element.FontSize,
+                FontWeight = element.Weight,
+                FontStyle = element.Style,
+                TextDecorations = element.Decorations,
+                Foreground = new SolidColorBrush(element.Color),
+                TextWrapping = TextWrapping.Wrap,
+            };
+            block.Measure(new Size(width, double.PositiveInfinity));
+            block.Arrange(new Rect(0, 0, width, Math.Max(1, block.DesiredSize.Height)));
+            var blockTarget = new RenderTargetBitmap(
+                Math.Max(1, (int)Math.Ceiling(width)),
+                Math.Max(1, (int)Math.Ceiling(block.DesiredSize.Height)),
+                96, 96, PixelFormats.Pbgra32);
+            blockTarget.Render(block);
+            dc.DrawImage(blockTarget, new Rect(element.WorldX + 4, element.WorldY + 4, width, block.DesiredSize.Height));
+        }
+        else if (element.ImageSource is not null)
+        {
+            dc.DrawImage(
+                element.ImageSource,
+                new Rect(element.WorldX, element.WorldY, element.WorldWidth, element.WorldHeight));
+        }
+    }
+
     // ---------- 墨迹工具状态 ----------
 
     private void SetEditingModeNone()
@@ -1003,9 +1149,11 @@ public partial class InfiniteCanvas : UserControl
     {
         var editingMode = _touchActive || ActiveTool is InkTool.Select or InkTool.Text
             ? InkCanvasEditingMode.None
-            : ActiveTool == InkTool.Eraser
-                ? InkCanvasEditingMode.EraseByStroke
-                : InkCanvasEditingMode.Ink;
+            : ActiveTool == InkTool.Lasso
+                ? InkCanvasEditingMode.Select
+                : ActiveTool == InkTool.Eraser
+                    ? InkCanvasEditingMode.EraseByStroke
+                    : InkCanvasEditingMode.Ink;
 
         ink.EditingMode = editingMode;
         ink.DefaultDrawingAttributes = CreateDrawingAttributes();

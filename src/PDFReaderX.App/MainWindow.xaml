@@ -8,7 +8,8 @@
         Height="800" Width="1280"
         WindowStartupLocation="CenterScreen"
         AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop"
-        PreviewKeyDown="OnPreviewKeyDown">
+        PreviewKeyDown="OnPreviewKeyDown"
+        Closing="OnWindowClosing">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <converters:ColorToBrushConverter x:Key="ColorToBrush"/>
@@ -27,6 +28,11 @@
             <Button Content="打开 PDF" Command="{Binding OpenCommand}" Margin="4,2"/>
             <Button Content="关闭" Command="{Binding CloseCommand}" Margin="4,2"/>
             <Separator/>
+            <Button Content="保存" Click="OnSavePdfrxClick" Margin="4,2"
+                    ToolTip="保存批注到 .pdfrx：打开批注文档时直接覆盖保存，普通 PDF 时另存为新批注文档"/>
+            <Button Content="导出 PDF" Click="OnExportPdfClick" Margin="4,2"
+                    ToolTip="把墨迹与元素合并渲染导出为新的 PDF 文件"/>
+            <Separator/>
             <Button Content="设置" Command="{Binding OpenSettingsCommand}" Margin="4,2"
                     ToolTip="LLM、书签与通用设置"/>
             <TextBlock Text="{Binding FileName}" VerticalAlignment="Center" Margin="4,0"/>
@@ -44,6 +50,9 @@
             <RadioButton Content="文本" GroupName="InkTool" Margin="4,2"
                          IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Text}"
                          ToolTip="点击画布插入文本框，回车确认、Esc 取消"/>
+            <RadioButton Content="套索" GroupName="InkTool" Margin="4,2"
+                         IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Lasso}"
+                         ToolTip="圈选墨迹笔划，Delete 删除选中的笔划"/>
             <Separator/>
             <Button Content="图片" Margin="4,2" Click="OnInsertImageClick"
                     ToolTip="从文件插入图片到画布（也可 Ctrl+V 粘贴或直接拖入）"/>
@@ -289,5 +298,13 @@
                              Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"/>
             </StatusBarItem>
         </StatusBar>
+
+        <Border x:Name="SaveToast" Grid.RowSpan="4"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                Margin="0,0,16,36" Padding="14,8" CornerRadius="6"
+                Background="#E6202020" IsHitTestVisible="False"
+                Visibility="Collapsed">
+            <TextBlock x:Name="SaveToastText" Foreground="White" FontSize="13"/>
+        </Border>
     </Grid>
 </Window>

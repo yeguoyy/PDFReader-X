@@ -1,3 +1,4 @@
+using System.IO;
 using System.Drawing;
 using PdfiumViewer;
 
@@ -12,13 +13,18 @@ public sealed class PdfRenderService : IDisposable
     private readonly PdfDocument _document;
     private readonly object _renderLock = new();
 
-    private PdfRenderService(PdfDocument document, string filePath)
+    private PdfRenderService(PdfDocument document, string filePath, byte[]? sourceBytes = null, Stream? sourceStream = null)
     {
         _document = document;
         FilePath = filePath;
+        _sourceBytes = sourceBytes;
+        _sourceStream = sourceStream;
     }
 
     public string FilePath { get; }
+
+    private readonly byte[]? _sourceBytes;
+    private readonly Stream? _sourceStream; // 从字节加载时保留内存流，PdfiumViewer 可能持有它
 
     public int PageCount => _document.PageCount;
 
@@ -27,6 +33,18 @@ public sealed class PdfRenderService : IDisposable
         ArgumentNullException.ThrowIfNull(filePath);
         return new PdfRenderService(PdfDocument.Load(filePath), filePath);
     }
+
+    /// <summary>从内存字节加载 PDF（打开 .pdfrx 包内嵌 PDF 使用），FilePath 仅作显示名。</summary>
+    public static PdfRenderService Load(byte[] data, string displayPath)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        var stream = new MemoryStream(data);
+        var document = PdfDocument.Load(stream);
+        return new PdfRenderService(document, displayPath, data, stream);
+    }
+
+    /// <summary>原始 PDF 字节：内存加载的直接返回，文件加载的读取文件（保存 .pdfrx 时嵌入用）。</summary>
+    public byte[] GetSourceBytes() => _sourceBytes ?? File.ReadAllBytes(FilePath);
 
     /// <summary>页面原始尺寸（磅，72dpi）。</summary>
     public SizeF GetPageSize(int pageIndex) => _document.PageSizes[pageIndex];
@@ -90,5 +108,9 @@ public sealed class PdfRenderService : IDisposable
         return result;
     }
 
-    public void Dispose() => _document.Dispose();
+    public void Dispose()
+    {
+        _document.Dispose();
+        _sourceStream?.Dispose();
+    }
 }

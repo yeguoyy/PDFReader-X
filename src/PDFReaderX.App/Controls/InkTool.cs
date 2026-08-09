@@ -8,4 +8,5 @@ public enum InkTool
     Highlighter,
     Eraser,
     Text,
+    Lasso,
 }

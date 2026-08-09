@@ -5,7 +5,10 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Win32;
+using PDFReaderX.App.Models;
+using PDFReaderX.App.Services;
 using PDFReaderX.App.ViewModels;
 
 namespace PDFReaderX.App;
@@ -13,10 +16,16 @@ namespace PDFReaderX.App;
 public partial class MainWindow : Window
 {
     private bool _thumbnailListHover;
+    private bool _bookmarksDirty;
 
     public MainWindow()
     {
         InitializeComponent();
+        _saveToastTimer.Tick += (_, _) =>
+        {
+            _saveToastTimer.Stop();
+            SaveToast.Visibility = Visibility.Collapsed;
+        };
         DataContextChanged += OnDataContextChanged;
         Canvas.UndoStateChanged += (_, _) => UpdateUndoButtons();
         UpdateUndoButtons();
@@ -27,10 +36,16 @@ public partial class MainWindow : Window
         if (e.OldValue is MainWindowViewModel oldViewModel)
         {
             oldViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            oldViewModel.PdfrxReady -= OnPdfrxReady;
+            oldViewModel.DocumentOpened -= OnDocumentOpened;
+            oldViewModel.Bookmarks.CollectionChanged -= OnBookmarksChanged;
         }
         if (e.NewValue is MainWindowViewModel newViewModel)
         {
             newViewModel.PropertyChanged += OnViewModelPropertyChanged;
+            newViewModel.PdfrxReady += OnPdfrxReady;
+            newViewModel.DocumentOpened += OnDocumentOpened;
+            newViewModel.Bookmarks.CollectionChanged += OnBookmarksChanged;
         }
     }
 
@@ -51,9 +66,229 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnResetZoomClick(object sender, RoutedEventArgs e)
+    private bool _isExitingWithSave;
+
+    private void OnWindowClosing(object? sender, CancelEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel viewModel || viewModel.Document is null)
+        {
+            return;
+        }
+
+        if (_isExitingWithSave)
+        {
+            return; // 保存已完成，允许直接关闭
+        }
+
+        if (!Canvas.IsModified && !_bookmarksDirty)
+        {
+            return;
+        }
+
+        var confirm = new ExitConfirmWindow { Owner = this };
+        var choice = confirm.ShowDialog();
+        if (choice is null)
+        {
+            e.Cancel = true; // 取消关闭
+            return;
+        }
+        if (choice == false)
+        {
+            return; // 不保存，直接退出
+        }
+
+        // 保存并退出：先取消本次关闭，异步保存并显示进度，完成后真正退出
+        e.Cancel = true;
+        SaveOnExitAsync(viewModel);
+    }
+
+    private async void SaveOnExitAsync(MainWindowViewModel viewModel)
+    {
+        if (viewModel.Document is not { } document)
+        {
+            return; // 文档已关闭，直接退出
+        }
+
+        var progressWindow = new ExitSaveWindow { Owner = this };
+        progressWindow.Show();
+        try
+        {
+            var progress = new Progress<string>(text => progressWindow.SetStatus(text));
+            if (!string.IsNullOrEmpty(viewModel.CurrentPdfrxPath))
+            {
+                // 退出保存不重新内嵌 PDF（保留源文件引用），避免写入上百 MB
+                // SaveAsync 需在 UI 线程读取画布元素，写文件部分内部已在后台执行
+                await PdfrxStore.SaveAsync(
+                    viewModel.CurrentPdfrxPath, Canvas, document, viewModel.Bookmarks,
+                    progress, embedPdf: false);
+            }
+            else
+            {
+                SessionStore.Save(Canvas, document, viewModel.Bookmarks);
+            }
+            progressWindow.SetCompleted();
+            await Task.Delay(250);
+            progressWindow.Close();
+            _isExitingWithSave = true;
+            Close();
+        }
+        catch (Exception ex)
+        {
+            LogExitSaveError(ex);
+            var stillExit = progressWindow.AskExitAfterFailure($"{ex.GetType().Name}: {ex.Message}");
+            progressWindow.Close();
+            if (stillExit)
+            {
+                _isExitingWithSave = true;
+                Close();
+            }
+        }
+    }
+
+    private readonly DispatcherTimer _saveToastTimer = new() { Interval = TimeSpan.FromSeconds(2.5) };
+
+    private void ShowSaveToast(string message, bool autoHide = false)
+    {
+        SaveToastText.Text = message;
+        SaveToast.Visibility = Visibility.Visible;
+        _saveToastTimer.Stop();
+        if (autoHide)
+        {
+            _saveToastTimer.Start();
+        }
+    }
+
+    private static void LogExitSaveError(Exception ex)
+    {
+        try
+        {
+            var logDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "PDFReaderX", "logs");
+            Directory.CreateDirectory(logDir);
+            File.AppendAllText(
+                Path.Combine(logDir, "exit-save-error.log"),
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}\n\n");
+        }
+        catch
+        {
+            // 日志写入失败不影响退出
+        }
+    }
+
+        private void OnResetZoomClick(object sender, RoutedEventArgs e)
     {
         Canvas.ResetView();
+    }
+
+    private void OnDocumentOpened()
+    {
+        Canvas.ResetModified();
+        _bookmarksDirty = false;
+    }
+
+    private void OnBookmarksChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        _bookmarksDirty = true;
+    }
+
+    private void OnPdfrxReady(PdfrxPackage package)
+    {
+        Canvas.RestoreFromPackage(package);
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.StatusText = "批注文档已恢复";
+        }
+    }
+
+    private async void OnSavePdfrxClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel viewModel || viewModel.Document is not { } document)
+        {
+            MessageBox.Show("请先打开一个 PDF 文档。", "PDFReader X", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var targetPath = viewModel.CurrentPdfrxPath;
+        if (string.IsNullOrEmpty(targetPath))
+        {
+            var dialog = new SaveFileDialog
+            {
+                Title = "保存批注文档",
+                Filter = "PDFReader X 批注文档 (*.pdfrx)|*.pdfrx",
+                FileName = Path.GetFileNameWithoutExtension(viewModel.FileName) + ".pdfrx",
+            };
+            if (dialog.ShowDialog() != true)
+            {
+                return;
+            }
+            targetPath = dialog.FileName;
+        }
+        else if (!Canvas.IsModified && !_bookmarksDirty)
+        {
+            ShowSaveToast("没有需要保存的更改", autoHide: true);
+            return;
+        }
+
+        try
+        {
+            var progress = new Progress<string>(text => ShowSaveToast(text));
+            await PdfrxStore.SaveAsync(targetPath, Canvas, document, viewModel.Bookmarks, progress);
+            viewModel.CurrentPdfrxPath = targetPath;
+            Canvas.ResetModified();
+            _bookmarksDirty = false;
+            var fileName = Path.GetFileName(targetPath);
+            ShowSaveToast($"已保存 {fileName}", autoHide: true);
+            viewModel.StatusText = $"已保存 {fileName}";
+        }
+        catch (Exception ex)
+        {
+            ShowSaveToast("保存失败", autoHide: true);
+            MessageBox.Show(
+                $"保存失败：\n{ex.Message}\n\n如果文件正被其他程序（如杀毒软件）占用，请稍后重试。",
+                "PDFReader X",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private async void OnExportPdfClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel viewModel || viewModel.Document is not { } document)
+        {
+            MessageBox.Show("请先打开一个 PDF 文档。", "PDFReader X", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dialog = new SaveFileDialog
+        {
+            Title = "导出 PDF",
+            Filter = "PDF 文件 (*.pdf)|*.pdf",
+            FileName = Path.GetFileNameWithoutExtension(viewModel.FileName) + "-批注.pdf",
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var progress = new Progress<string>(text =>
+            {
+                viewModel.StatusText = text;
+                ShowSaveToast(text);
+            });
+            await PdfExportService.ExportAsync(dialog.FileName, Canvas, document, progress);
+            viewModel.StatusText = $"已导出 {Path.GetFileName(dialog.FileName)}";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"导出失败：\n{ex.Message}",
+                "PDFReader X",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     private void OnInsertImageClick(object sender, RoutedEventArgs e)
@@ -175,7 +410,14 @@ public partial class MainWindow : Window
         }
         else if (e.Key == Key.Delete)
         {
-            Canvas.DeleteSelectedElement();
+            if (Canvas.HasSelectedInk)
+            {
+                Canvas.DeleteSelectedInk();
+            }
+            else
+            {
+                Canvas.DeleteSelectedElement();
+            }
             e.Handled = true;
         }
         else if (ctrl && e.Key == Key.V && Clipboard.ContainsImage())

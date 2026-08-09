@@ -55,6 +55,19 @@ public class PdfRenderServiceTests
     }
 
     [Fact]
+    public void LoadFromBytes_ThenRenderPage_ProducesBitmap()
+    {
+        var bytes = File.ReadAllBytes(SamplePdfPath);
+        using var service = PdfRenderService.Load(bytes, "sample.pdf");
+
+        Assert.Equal(3, service.PageCount);
+        using var image = service.RenderPage(0, 96);
+        Assert.NotNull(image);
+        Assert.InRange(image.Width, 810, 820);
+        Assert.InRange(image.Height, 1050, 1062);
+    }
+
+    [Fact]
     public void RenderThumbnail_ProducesBitmapNearTargetWidth()
     {
         using var service = PdfRenderService.Load(SamplePdfPath);

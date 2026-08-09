@@ -1,0 +1,10 @@
+﻿<Window x:Class="PDFReaderX.App.ExitSaveWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="正在保存" SizeToContent="WidthAndHeight" Width="420"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" ResizeMode="NoResize" WindowStyle="ToolWindow">
+    <StackPanel Margin="16" Width="380">
+        <TextBlock x:Name="StatusText" Text="正在保存修改…" TextWrapping="Wrap" FontSize="13"/>
+        <ProgressBar x:Name="Progress" Height="8" Margin="0,12,0,0" Minimum="0" Maximum="100" Value="10"/>
+    </StackPanel>
+</Window>
