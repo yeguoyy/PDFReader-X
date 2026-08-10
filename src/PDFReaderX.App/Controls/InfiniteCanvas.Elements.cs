@@ -1,6 +1,8 @@
 using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Ink;
 using System.Windows.Media;
@@ -30,10 +32,22 @@ public partial class InfiniteCanvas
         public TextDecorationCollection? Decorations;
         public BitmapSource? ImageSource;
         public Color Color = Colors.Black; // 文本颜色（随元素保存，.pdfrx 持久化用）
+        public List<TextRunInfo>? TextRuns; // 分段富文本（局部格式），null 表示整段统一格式
         public double WorldX;
         public double WorldY;
         public double WorldWidth;
         public double WorldHeight;
+    }
+
+    /// <summary>富文本分段（局部格式），Text 内 "\n" 表示换行。</summary>
+    private sealed class TextRunInfo
+    {
+        public string Text = string.Empty;
+        public double FontSize = DefaultTextFontSize;
+        public FontWeight Weight = FontWeights.Normal;
+        public FontStyle Style = FontStyles.Normal;
+        public TextDecorationCollection? Decorations;
+        public Color Color = Colors.Black;
     }
 
     private readonly List<CanvasElement> _elements = new();
@@ -172,7 +186,7 @@ public partial class InfiniteCanvas
         _editingTextIsNew = true;
         AttachTextEditing(element);
         AddResizeThumbs(element, element.Root);
-        FocusTextEditBox((TextBox)element.Content);
+        FocusTextEditBox((RichTextBox)element.Content);
     }
 
     /// <summary>创建文本时按住拖动：以按下点为左上角调整初始框大小（最小 40×30）。</summary>
@@ -594,26 +608,157 @@ public partial class InfiniteCanvas
 
     // ---------- 文本框编辑 ----------
 
-    /// <summary>创建可见的文本输入框（白底，边框由画布层装饰提供，文字颜色跟随当前画笔颜色）。</summary>
-    private TextBox CreateTextEditBox(string text = "", CanvasElement? format = null)
+    /// <summary>创建可见的富文本输入框（白底，边框由画布层装饰提供，文字颜色跟随当前画笔颜色）。</summary>
+    private RichTextBox CreateTextEditBox(IReadOnlyList<TextRunInfo>? runs = null, CanvasElement? format = null)
     {
-        return new TextBox
+        var box = new RichTextBox
         {
-            Text = text,
             FontSize = format?.FontSize ?? TextFontSize,
             FontWeight = format?.Weight ?? FontWeights.Normal,
             FontStyle = format?.Style ?? FontStyles.Normal,
-            TextDecorations = format?.Decorations,
             Foreground = new SolidColorBrush(format?.Color ?? PenColor),
             Background = Brushes.White,
             BorderThickness = new Thickness(0),
             Padding = new Thickness(4),
             VerticalContentAlignment = VerticalAlignment.Top,
             AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            // 显式设置选区画刷：失焦（点工具栏字号/颜色）时也保留蓝色高亮，能看清哪些字符被选中
+            SelectionBrush = new SolidColorBrush(Color.FromRgb(0x2D, 0x6C, 0xDF)),
+            SelectionTextBrush = Brushes.White,
+            IsInactiveSelectionHighlightEnabled = true,
         };
+        FillRichTextBox(box, runs);
+        return box;
     }
+
+    /// <summary>把分段格式写入 RichTextBox（"\n" 转为软换行），编辑与提交保持同一结构。</summary>
+    private static void FillRichTextBox(RichTextBox box, IReadOnlyList<TextRunInfo>? runs)
+    {
+        box.Document.Blocks.Clear();
+        var paragraph = new Paragraph { Margin = new Thickness(0) };
+        box.Document.Blocks.Add(paragraph);
+        if (runs is null)
+        {
+            return;
+        }
+        foreach (var run in runs)
+        {
+            var segments = run.Text.Split('\n');
+            for (var i = 0; i < segments.Length; i++)
+            {
+                if (i > 0)
+                {
+                    paragraph.Inlines.Add(new LineBreak());
+                }
+                if (segments[i].Length == 0)
+                {
+                    continue;
+                }
+                paragraph.Inlines.Add(new Run(segments[i])
+                {
+                    FontSize = run.FontSize,
+                    FontWeight = run.Weight,
+                    FontStyle = run.Style,
+                    TextDecorations = run.Decorations,
+                    Foreground = new SolidColorBrush(run.Color),
+                });
+            }
+        }
+    }
+
+    /// <summary>提取 RichTextBox 的全部文本与分段格式（段落/软换行统一转为 "\n"）。</summary>
+    private static List<TextRunInfo> ExtractRuns(RichTextBox box)
+    {
+        var runs = new List<TextRunInfo>();
+        TextRunInfo? last = null;
+
+        void PushBreak()
+        {
+            runs.Add(new TextRunInfo
+            {
+                Text = "\n",
+                FontSize = last?.FontSize ?? DefaultTextFontSize,
+                Weight = last?.Weight ?? FontWeights.Normal,
+                Style = last?.Style ?? FontStyles.Normal,
+                Decorations = last?.Decorations,
+                Color = last?.Color ?? Colors.Black,
+            });
+            last = null;
+        }
+
+        void Walk(InlineCollection inlines)
+        {
+            foreach (var inline in inlines)
+            {
+                switch (inline)
+                {
+                    case Run run when run.Text.Length > 0:
+                        runs.Add(new TextRunInfo
+                        {
+                            Text = run.Text,
+                            FontSize = run.FontSize,
+                            Weight = run.FontWeight,
+                            Style = run.FontStyle,
+                            Decorations = run.TextDecorations,
+                            Color = (run.Foreground as SolidColorBrush)?.Color ?? Colors.Black,
+                        });
+                        last = runs[^1];
+                        break;
+                    case LineBreak:
+                        PushBreak();
+                        break;
+                    case Span span:
+                        Walk(span.Inlines);
+                        break;
+                }
+            }
+        }
+
+        var firstBlock = true;
+        foreach (var block in box.Document.Blocks)
+        {
+            if (block is not Paragraph paragraph)
+            {
+                continue;
+            }
+            if (!firstBlock)
+            {
+                PushBreak(); // 段落之间补换行
+            }
+            firstBlock = false;
+            Walk(paragraph.Inlines);
+        }
+        while (runs.Count > 0 && runs[^1].Text == "\n")
+        {
+            runs.RemoveAt(runs.Count - 1); // 尾部段落符不保留
+        }
+        return runs;
+    }
+
+    /// <summary>拼接分段文本为纯文本（保留 "\n" 换行）。</summary>
+    private static string BuildPlainText(IReadOnlyList<TextRunInfo> runs)
+    {
+        var sb = new StringBuilder();
+        foreach (var run in runs)
+        {
+            sb.Append(run.Text);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>规范化换行符：\r\n 与 \r 统一为 \n（旧文件兼容）。</summary>
+    private static string NormalizeNewlines(string? text)
+        => string.IsNullOrEmpty(text) ? string.Empty : text.Replace("\r\n", "\n").Replace('\r', '\n');
+
+    /// <summary>按分段格式创建渲染用 Run。</summary>
+    private static Run CreateRun(TextRunInfo run) => new(run.Text)
+    {
+        FontSize = run.FontSize,
+        FontWeight = run.Weight,
+        FontStyle = run.Style,
+        TextDecorations = run.Decorations,
+        Foreground = new SolidColorBrush(run.Color),
+    };
 
     /// <summary>文本框边框样式的视觉参数（编辑框与选择框共用，保持同步）。</summary>
     private static (Brush Brush, double Thickness, DoubleCollection? Dashes, bool Visible) GetTextBorderVisual(string style)
@@ -666,7 +811,7 @@ public partial class InfiniteCanvas
     }
 
     /// <summary>立即尝试聚焦，并在随后 ~2s 内持续重试（覆盖窗口激活/布局延迟导致的首帧聚焦失败）。</summary>
-    private void FocusTextEditBox(TextBox box, bool selectAll = false)
+    private void FocusTextEditBox(RichTextBox box, bool selectAll = false)
     {
         _textEditSelectAllOnFocus = selectAll;
         if (Window.GetWindow(this) is Window window && !window.IsActive)
@@ -713,7 +858,7 @@ public partial class InfiniteCanvas
 
     private void OnEditBoxLoaded(object sender, RoutedEventArgs e)
     {
-        var box = (TextBox)sender;
+        var box = (RichTextBox)sender;
         box.Loaded -= OnEditBoxLoaded;
         if (IsCurrentEditBox(box) && Keyboard.FocusedElement != box)
         {
@@ -721,10 +866,10 @@ public partial class InfiniteCanvas
         }
     }
 
-    private bool IsCurrentEditBox(TextBox box)
+    private bool IsCurrentEditBox(RichTextBox box)
         => _editingTextElement is not null && ReferenceEquals(_editingTextElement.Content, box);
 
-    private void TryFocusTextEditBox(TextBox box, bool selectAll)
+    private void TryFocusTextEditBox(RichTextBox box, bool selectAll)
     {
         var focused = box.Focus();
         if (!focused)
@@ -763,12 +908,28 @@ public partial class InfiniteCanvas
 
     private void AttachTextEditing(CanvasElement element)
     {
-        var box = (TextBox)element.Content;
+        var box = (RichTextBox)element.Content;
         box.KeyDown += OnTextKeyDown;
         box.LostKeyboardFocus += OnTextLostFocus;
         box.TextChanged += (_, _) => AutoSizeTextEditBox(); // 内容变化时扩展框高，避免滚动条压缩宽度
         // 点击输入框时强制重新获得键盘焦点（兜底：某些情况下 WPF 默认点击聚焦会被上层事件吞掉）
-        box.PreviewMouseLeftButtonDown += (_, _) => Keyboard.Focus(box);
+        box.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            // 点击位置落在已有选区内：只聚焦不清除选区，避免“点字号后回来选区消失”
+            if (!box.Selection.IsEmpty && e.GetPosition(box) is Point click)
+            {
+                var position = box.GetPositionFromPoint(click, true);
+                if (position is not null
+                    && box.Selection.Start.CompareTo(position) <= 0
+                    && box.Selection.End.CompareTo(position) >= 0)
+                {
+                    Keyboard.Focus(box);
+                    e.Handled = true;
+                    return;
+                }
+            }
+            Keyboard.Focus(box);
+        };
     }
 
     private void OnTextKeyDown(object sender, KeyEventArgs e)
@@ -777,21 +938,21 @@ public partial class InfiniteCanvas
         {
             if (e.Key == Key.B)
             {
-                ToggleBold((TextBox)sender);
+                ToggleBold((RichTextBox)sender);
                 AutoSizeTextEditBox();
                 e.Handled = true;
                 return;
             }
             if (e.Key == Key.I)
             {
-                ToggleItalic((TextBox)sender);
+                ToggleItalic((RichTextBox)sender);
                 AutoSizeTextEditBox();
                 e.Handled = true;
                 return;
             }
             if (e.Key == Key.U)
             {
-                ToggleUnderline((TextBox)sender);
+                ToggleUnderline((RichTextBox)sender);
                 AutoSizeTextEditBox();
                 e.Handled = true;
                 return;
@@ -799,7 +960,7 @@ public partial class InfiniteCanvas
         }
         if (e.Key == Key.Enter && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
         {
-            e.Handled = true; // 阻止 TextBox 插入换行
+            e.Handled = true; // 阻止 RichTextBox 插入换行
             CommitTextElement();
         }
         else if (e.Key == Key.Escape)
@@ -807,53 +968,50 @@ public partial class InfiniteCanvas
             e.Handled = true;
             CancelTextElement();
         }
-        // Shift+Enter 放行给 TextBox 默认处理：插入换行
+        // Shift+Enter 放行给 RichTextBox 默认处理：插入软换行
     }
 
-    /// <summary>根据文本框内坐标计算最近的光标插入位置（OneNote 式点击定位）。</summary>
-    private static int GetCaretIndexFromPoint(TextBox box, Point localPoint)
+    /// <summary>根据输入框内坐标计算最近的光标插入位置（OneNote 式点击定位）。</summary>
+    private static TextPointer GetTextPositionFromPoint(RichTextBox box, Point localPoint)
+        => box.GetPositionFromPoint(localPoint, true);
+
+    /// <summary>把格式应用到选区，并强制刷新选区高亮（失焦状态下修改字号后阴影可能不跟随重排）。</summary>
+    private static void ApplySelectionFormat(RichTextBox box, DependencyProperty property, object? value)
     {
-        if (string.IsNullOrEmpty(box.Text))
+        var start = box.Selection.Start;
+        var end = box.Selection.End;
+        box.Selection.ApplyPropertyValue(property, value);
+        if (start.CompareTo(end) != 0)
         {
-            return 0;
+            box.Selection.Select(start, end);
         }
-        var best = box.Text.Length;
-        var bestDist = double.MaxValue;
-        for (var i = 0; i <= box.Text.Length; i++)
-        {
-            var rect = box.GetRectFromCharacterIndex(i);
-            if (rect.Height <= 0)
-            {
-                continue;
-            }
-            var target = new Point(
-                Math.Clamp(localPoint.X, rect.Left, rect.Right),
-                Math.Clamp(localPoint.Y, rect.Top, rect.Bottom));
-            var dx = target.X - localPoint.X;
-            var dy = target.Y - localPoint.Y;
-            var dist = dx * dx + dy * dy;
-            if (dist < bestDist)
-            {
-                bestDist = dist;
-                best = i;
-            }
-        }
-        return best;
     }
 
-    private static void ToggleBold(TextBox box)
-        => box.FontWeight = box.FontWeight == FontWeights.Bold ? FontWeights.Normal : FontWeights.Bold;
+    private static void ToggleBold(RichTextBox box)
+    {
+        var current = box.Selection.GetPropertyValue(TextElement.FontWeightProperty);
+        var isBold = current is FontWeight weight && weight == FontWeights.Bold;
+        ApplySelectionFormat(box, TextElement.FontWeightProperty, isBold ? FontWeights.Normal : FontWeights.Bold);
+    }
 
-    private static void ToggleItalic(TextBox box)
-        => box.FontStyle = box.FontStyle == FontStyles.Italic ? FontStyles.Normal : FontStyles.Italic;
+    private static void ToggleItalic(RichTextBox box)
+    {
+        var current = box.Selection.GetPropertyValue(TextElement.FontStyleProperty);
+        var isItalic = current is FontStyle style && style == FontStyles.Italic;
+        ApplySelectionFormat(box, TextElement.FontStyleProperty, isItalic ? FontStyles.Normal : FontStyles.Italic);
+    }
 
-    private static void ToggleUnderline(TextBox box)
-        => box.TextDecorations = box.TextDecorations is { Count: > 0 } ? null : TextDecorations.Underline;
+    private static void ToggleUnderline(RichTextBox box)
+    {
+        var current = box.Selection.GetPropertyValue(Inline.TextDecorationsProperty);
+        var isUnderline = current is TextDecorationCollection { Count: > 0 };
+        ApplySelectionFormat(box, Inline.TextDecorationsProperty, isUnderline ? null : TextDecorations.Underline);
+    }
 
     /// <summary>工具栏加粗按钮：作用于正在编辑的文本框。</summary>
     public void ToggleEditBold()
     {
-        if (_editingTextElement?.Content is TextBox box)
+        if (_editingTextElement?.Content is RichTextBox box)
         {
             ToggleBold(box);
             AutoSizeTextEditBox();
@@ -863,7 +1021,7 @@ public partial class InfiniteCanvas
     /// <summary>工具栏斜体按钮：作用于正在编辑的文本框。</summary>
     public void ToggleEditItalic()
     {
-        if (_editingTextElement?.Content is TextBox box)
+        if (_editingTextElement?.Content is RichTextBox box)
         {
             ToggleItalic(box);
             AutoSizeTextEditBox();
@@ -873,7 +1031,7 @@ public partial class InfiniteCanvas
     /// <summary>工具栏下划线按钮：作用于正在编辑的文本框。</summary>
     public void ToggleEditUnderline()
     {
-        if (_editingTextElement?.Content is TextBox box)
+        if (_editingTextElement?.Content is RichTextBox box)
         {
             ToggleUnderline(box);
             AutoSizeTextEditBox();
@@ -883,12 +1041,12 @@ public partial class InfiniteCanvas
     /// <summary>编辑框高度跟随内容自动扩展（只增不减），与提交后 TextBlock 高度一致，避免位移。</summary>
     public void AutoSizeTextEditBox()
     {
-        if (_editingTextElement is not { } element || element.Content is not TextBox box)
+        if (_editingTextElement is not { } element || element.Content is not RichTextBox box)
         {
             return;
         }
         var width = Math.Max(40, element.WorldWidth);
-        var contentHeight = MeasureTextBlockHeight(box.Text, box.FontSize, box.FontWeight, box.FontStyle, box.FontFamily, width - 8);
+        var contentHeight = MeasureTextBlockHeight(ExtractRuns(box), width - 8);
         var height = Math.Max(contentHeight, element.WorldHeight);
         if (Math.Abs(element.Root.Height - height) > 0.5)
         {
@@ -897,18 +1055,14 @@ public partial class InfiniteCanvas
         }
     }
 
-    /// <summary>用与提交后 TextBlock 相同的参数测量文本所需高度。</summary>
-    private static double MeasureTextBlockHeight(string text, double fontSize, FontWeight weight, FontStyle style, FontFamily? family, double width)
+    /// <summary>用与提交后 TextBlock 相同的参数测量分段文本所需高度。</summary>
+    private static double MeasureTextBlockHeight(IReadOnlyList<TextRunInfo> runs, double width)
     {
-        var probe = new TextBlock
+        var probe = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        foreach (var run in runs)
         {
-            Text = text,
-            FontSize = fontSize,
-            FontWeight = weight,
-            FontStyle = style,
-            FontFamily = family,
-            TextWrapping = TextWrapping.Wrap,
-        };
+            probe.Inlines.Add(CreateRun(run));
+        }
         probe.Measure(new Size(Math.Max(1, width), double.PositiveInfinity));
         return Math.Max(20, probe.DesiredSize.Height + 8);
     }
@@ -918,7 +1072,7 @@ public partial class InfiniteCanvas
     {
         while (node is not null)
         {
-            if (node is ToolBar)
+            if (node is ToolBar || node is FrameworkElement { Name: "FileToolbar" or "DrawingToolbar" })
             {
                 return true;
             }
@@ -929,14 +1083,15 @@ public partial class InfiniteCanvas
 
     private void OnTextLostFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        var box = (TextBox)sender;
+        var box = (RichTextBox)sender;
         // 焦点移到工具栏（颜色/字号/B/I/U 等格式控件）：保持编辑状态，等待格式生效
         if (IsCurrentEditBox(box) && e.NewFocus is DependencyObject newFocus && IsInToolbar(newFocus))
         {
             return;
         }
         // 空输入框焦点意外丢失到画布/窗口（非控件）：延迟补回键盘焦点，避免“输不进去”
-        if (IsCurrentEditBox(box) && string.IsNullOrWhiteSpace(box.Text) && e.NewFocus is not Control)
+        var isEmpty = string.IsNullOrWhiteSpace(new TextRange(box.Document.ContentStart, box.Document.ContentEnd).Text);
+        if (IsCurrentEditBox(box) && isEmpty && e.NewFocus is not Control)
         {
             var retryTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
             retryTimer.Tick += (_, _) =>
@@ -950,7 +1105,7 @@ public partial class InfiniteCanvas
             retryTimer.Start();
             return;
         }
-        if (!string.IsNullOrWhiteSpace(box.Text))
+        if (!isEmpty)
         {
             CommitTextElement();
         }
@@ -965,13 +1120,15 @@ public partial class InfiniteCanvas
         }
         var wasNew = _editingTextIsNew;
         _editingTextElement = null;
-        var newText = ((TextBox)element.Content).Text;
-        var textBox = (TextBox)element.Content;
-        element.FontSize = textBox.FontSize;
-        element.Weight = textBox.FontWeight;
-        element.Style = textBox.FontStyle;
-        element.Decorations = textBox.TextDecorations;
-        element.Color = ((SolidColorBrush)textBox.Foreground).Color;
+        var textBox = (RichTextBox)element.Content;
+        var newRuns = ExtractRuns(textBox);
+        var newText = BuildPlainText(newRuns);
+        // 整段默认字段取第一个分段，兼容旧版读取
+        element.FontSize = newRuns.Count > 0 ? newRuns[0].FontSize : element.FontSize;
+        element.Weight = newRuns.Count > 0 ? newRuns[0].Weight : element.Weight;
+        element.Style = newRuns.Count > 0 ? newRuns[0].Style : element.Style;
+        element.Decorations = newRuns.Count > 0 ? newRuns[0].Decorations : element.Decorations;
+        element.Color = newRuns.Count > 0 ? newRuns[0].Color : element.Color;
 
         if (string.IsNullOrWhiteSpace(newText))
         {
@@ -982,14 +1139,14 @@ public partial class InfiniteCanvas
             else
             {
                 _elements.Add(element);
-                SetTextContent(element, element.Text);
+                SetTextContent(element, element.TextRuns ?? new List<TextRunInfo>());
             }
             return;
         }
 
         if (wasNew)
         {
-            SetTextContent(element, newText);
+            SetTextContent(element, newRuns);
             RegisterElement(element);
             RecordUndo(
                 undo: () => RemoveElementInternal(element),
@@ -997,12 +1154,12 @@ public partial class InfiniteCanvas
         }
         else
         {
-            var oldText = element.Text;
-            SetTextContent(element, newText);
+            var oldRuns = element.TextRuns ?? new List<TextRunInfo>();
+            SetTextContent(element, newRuns);
             _elements.Add(element);
             RecordUndo(
-                undo: () => SetTextContent(element, oldText),
-                redo: () => SetTextContent(element, newText));
+                undo: () => SetTextContent(element, oldRuns),
+                redo: () => SetTextContent(element, newRuns));
         }
     }
 
@@ -1022,7 +1179,7 @@ public partial class InfiniteCanvas
         else
         {
             _elements.Add(element);
-            SetTextContent(element, element.Text);
+            SetTextContent(element, element.TextRuns ?? new List<TextRunInfo>());
         }
     }
 
@@ -1034,7 +1191,11 @@ public partial class InfiniteCanvas
         }
         Deselect();
         _elements.Remove(element); // 编辑期间暂时移出正式列表，提交/取消时再恢复
-        var box = CreateTextEditBox(element.Text, element);
+        element.TextRuns ??= new List<TextRunInfo>
+        {
+            new() { Text = element.Text, FontSize = element.FontSize, Weight = element.Weight, Style = element.Style, Decorations = element.Decorations, Color = element.Color },
+        }; // 旧版元素进入编辑前先转为分段格式，撤销时能恢复原状
+        var box = CreateTextEditBox(element.TextRuns, element);
         element.Root.Width = Math.Max(40, element.WorldWidth); // 保持原框宽，避免编辑/提交后重新换行造成位移
         element.Root.Height = Math.Max(28, element.WorldHeight);
         element.Root.Children.Clear();
@@ -1051,28 +1212,53 @@ public partial class InfiniteCanvas
         {
             box.UpdateLayout();
             var local = RootGrid.TranslatePoint(point, box);
-            box.CaretIndex = GetCaretIndexFromPoint(box, local);
+            box.CaretPosition = GetTextPositionFromPoint(box, local);
         }
     }
 
-    private void SetTextContent(CanvasElement element, string text)
+    /// <summary>按分段格式创建渲染用 TextBlock（与编辑框相同的边距与换行）。</summary>
+    private static TextBlock CreateTextBlock(CanvasElement element, double width)
     {
-        element.Text = text;
-        var width = Math.Max(40, element.WorldWidth); // 与编辑时一致，提交前后无宽度变化
         var block = new TextBlock
         {
-            Text = text,
-            FontSize = element.FontSize,
-            FontWeight = element.Weight,
-            FontStyle = element.Style,
-            TextDecorations = element.Decorations,
             TextWrapping = TextWrapping.Wrap,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(4), // 与编辑时 TextBox 的内边距一致，避免提交后文字偏移
-            Foreground = new SolidColorBrush(element.Color),
+            Margin = new Thickness(4), // 与编辑时一致，避免提交后文字偏移
         };
-        block.Measure(new Size(Math.Max(1, width - 8), double.PositiveInfinity));
+        var runs = element.TextRuns;
+        if (runs is null || runs.Count == 0)
+        {
+            block.Text = element.Text;
+            block.FontSize = element.FontSize;
+            block.FontWeight = element.Weight;
+            block.FontStyle = element.Style;
+            block.TextDecorations = element.Decorations;
+            block.Foreground = new SolidColorBrush(element.Color);
+        }
+        else
+        {
+            foreach (var run in runs)
+            {
+                block.Inlines.Add(CreateRun(run));
+            }
+        }
+        block.Measure(new Size(Math.Max(1, width), double.PositiveInfinity));
+        return block;
+    }
+
+    private void SetTextContent(CanvasElement element, string text)
+        => SetTextContent(element, new List<TextRunInfo>
+        {
+            new() { Text = NormalizeNewlines(text), FontSize = element.FontSize, Weight = element.Weight, Style = element.Style, Decorations = element.Decorations, Color = element.Color },
+        });
+
+    private void SetTextContent(CanvasElement element, IReadOnlyList<TextRunInfo> runs)
+    {
+        element.Text = BuildPlainText(runs);
+        element.TextRuns = runs.ToList();
+        var width = Math.Max(40, element.WorldWidth); // 与编辑时一致，提交前后无宽度变化
+        var block = CreateTextBlock(element, Math.Max(1, width - 8));
         var contentHeight = Math.Max(20, block.DesiredSize.Height + 8);
         // 高度始终保留编辑时的框高（文字超出时扩展），保证提交前后几何完全一致、无位移
         var height = Math.Max(contentHeight, element.WorldHeight);
@@ -1112,6 +1298,15 @@ public partial class InfiniteCanvas
                     Italic = element.Style == FontStyles.Italic,
                     Underline = element.Decorations is { Count: > 0 },
                     Color = element.Color.ToString(),
+                    TextRuns = element.TextRuns?.Select(r => new CanvasTextRunData
+                    {
+                        Text = r.Text,
+                        FontSize = r.FontSize,
+                        Bold = r.Weight == FontWeights.Bold,
+                        Italic = r.Style == FontStyles.Italic,
+                        Underline = r.Decorations is { Count: > 0 },
+                        Color = r.Color.ToString(),
+                    }).ToList(),
                 });
             }
             else if (element.ImageSource is not null)
@@ -1227,12 +1422,23 @@ public partial class InfiniteCanvas
                 Style = data.Italic ? FontStyles.Italic : FontStyles.Normal,
                 Decorations = data.Underline ? TextDecorations.Underline : null,
                 Color = ParseColor(data.Color),
+                TextRuns = data.TextRuns is { Count: > 0 }
+                    ? data.TextRuns.Select(r => new TextRunInfo
+                    {
+                        Text = NormalizeNewlines(r.Text),
+                        FontSize = r.FontSize > 0 ? r.FontSize : DefaultTextFontSize,
+                        Weight = r.Bold ? FontWeights.Bold : FontWeights.Normal,
+                        Style = r.Italic ? FontStyles.Italic : FontStyles.Normal,
+                        Decorations = r.Underline ? TextDecorations.Underline : null,
+                        Color = ParseColor(r.Color),
+                    }).ToList()
+                    : null,
                 WorldX = data.X,
                 WorldY = data.Y,
                 WorldWidth = Math.Max(40, data.Width),
                 WorldHeight = Math.Max(28, data.Height),
             };
-            SetTextContent(element, element.Text);
+            SetTextContent(element, element.TextRuns ?? new List<TextRunInfo> { new() { Text = NormalizeNewlines(element.Text) } });
             AddElementInternal(element);
         }
     }

@@ -121,7 +121,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         OnPropertyChanged(nameof(CurrentPageBorderBrush));
     }
 
-    public IReadOnlyList<double> TextFontSizes { get; } = new[] { 10.0, 12.0, 14.0, 16.0, 20.0, 24.0, 32.0 };
+    public IReadOnlyList<double> TextFontSizes { get; } = new[] { 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 36.0, 48.0 };
 
     /// <summary>文本框字号（新建文本框与编辑中生效）。</summary>
     [ObservableProperty]

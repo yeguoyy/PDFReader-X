@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Ink;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -94,7 +95,9 @@ public partial class InfiniteCanvas : UserControl
 
     private readonly Dictionary<int, Border> _pageElements = new();
     private readonly Dictionary<int, InkCanvas> _inkCanvases = new();
+    private readonly Dictionary<InkCanvas, int> _inkPageIndex = new();
     private InkCanvas? _freeInk;
+    private InkCanvas? _liveInk;
     private readonly Dictionary<int, Rectangle> _imagesByPage = new();
     private readonly Dictionary<int, BitmapSource> _bitmapCache = new();
     private readonly List<int> _cacheOrder = new();
@@ -104,9 +107,11 @@ public partial class InfiniteCanvas : UserControl
     private bool _isMousePanning;
     private Point _lastMousePanPoint;
     private bool _touchActive;
+    private bool _eraserActive; // 手动跨层橡皮擦：拖动中持续擦除所有图层
     private int _documentEpoch;
     private bool _layoutDirty;
     private DispatcherTimer? _rerenderTimer;
+    private const double FreeInkLayerSize = 4_000_000;
 
     public InfiniteCanvas()
     {
@@ -182,9 +187,9 @@ public partial class InfiniteCanvas : UserControl
     private static void OnTextFontSizeChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var canvas = (InfiniteCanvas)d;
-        if (canvas._editingTextElement?.Content is TextBox box)
+        if (canvas._editingTextElement?.Content is RichTextBox box)
         {
-            box.FontSize = (double)e.NewValue; // 编辑中改字号立即生效
+            ApplySelectionFormat(box, TextElement.FontSizeProperty, (double)e.NewValue); // 编辑中改字号：作用于选中部分，无选中时作用于后续输入
             canvas.AutoSizeTextEditBox(); // 字号变化后同步扩展框高
         }
     }
@@ -380,9 +385,9 @@ public partial class InfiniteCanvas : UserControl
         {
             canvas.CommitTextElement(); // 仅切换工具时提交/清理未完成的输入框
         }
-        else if (e.Property == PenColorProperty && canvas._editingTextElement?.Content is TextBox box)
+        else if (e.Property == PenColorProperty && canvas._editingTextElement?.Content is RichTextBox box)
         {
-            box.Foreground = new SolidColorBrush(canvas.PenColor); // 编辑中改颜色立即生效，不打断输入
+            ApplySelectionFormat(box, TextElement.ForegroundProperty, new SolidColorBrush(canvas.PenColor)); // 编辑中改颜色：作用于选中部分，无选中时作用于后续输入
         }
         canvas.UpdateEditingState();
         canvas.Cursor = canvas.ActiveTool switch
@@ -398,8 +403,10 @@ public partial class InfiniteCanvas : UserControl
     {
         ViewportCanvas.Children.Clear();
         _freeInk = null;
+        _liveInk = null;
         _pageElements.Clear();
         _inkCanvases.Clear();
+        _inkPageIndex.Clear();
         _imagesByPage.Clear();
         _bitmapCache.Clear();
         _cacheOrder.Clear();
@@ -412,6 +419,7 @@ public partial class InfiniteCanvas : UserControl
         ClearElements();
         ClearUndoHistory();
         CreateFreeInkLayer();
+        CreateLiveInkLayer();
 
         if (Pages is null)
         {
@@ -437,7 +445,7 @@ public partial class InfiniteCanvas : UserControl
     /// </summary>
     private void CreateFreeInkLayer()
     {
-        const double size = 4_000_000;
+        const double size = FreeInkLayerSize;
         var ink = new InkCanvas
         {
             Width = size,
@@ -454,6 +462,26 @@ public partial class InfiniteCanvas : UserControl
         ink.StrokeErasing += OnStrokeErasing;
         ViewportCanvas.Children.Add(ink);
         _freeInk = ink;
+        ApplyToolToInk(ink);
+    }
+
+    /// <summary>实时墨迹覆盖层：钢笔/荧光笔绘制时置于最上层，跨页与自由画布的笔画绘制过程中实时可见，松手后拆分到各层。</summary>
+    private void CreateLiveInkLayer()
+    {
+        var ink = new InkCanvas
+        {
+            Width = FreeInkLayerSize,
+            Height = FreeInkLayerSize,
+            Background = Brushes.Transparent,
+        };
+        Canvas.SetLeft(ink, -FreeInkLayerSize / 2);
+        Canvas.SetTop(ink, -FreeInkLayerSize / 2);
+        ink.RenderTransformOrigin = new Point(0.5, 0.5);
+        Panel.SetZIndex(ink, int.MaxValue);
+        ink.PreviewTouchDown += OnInkPreviewTouchDown;
+        ink.StrokeCollected += OnStrokeCollected;
+        ViewportCanvas.Children.Add(ink);
+        _liveInk = ink;
         ApplyToolToInk(ink);
     }
 
@@ -493,6 +521,7 @@ public partial class InfiniteCanvas : UserControl
 
         ApplyToolToInk(ink);
         _inkCanvases[page.PageIndex] = ink;
+        _inkPageIndex[ink] = page.PageIndex;
         _imagesByPage[page.PageIndex] = image;
         return border;
     }
@@ -542,6 +571,10 @@ public partial class InfiniteCanvas : UserControl
         if (_freeInk is not null)
         {
             _freeInk.RenderTransform = new ScaleTransform(Zoom, Zoom);
+        }
+        if (_liveInk is not null)
+        {
+            _liveInk.RenderTransform = new ScaleTransform(Zoom, Zoom);
         }
         for (var i = 0; i < Pages.Count; i++)
         {
@@ -854,6 +887,15 @@ public partial class InfiniteCanvas : UserControl
             Deselect(); // 点击空白取消选择，随后继续平移
         }
 
+        if (e.ChangedButton == MouseButton.Left && ActiveTool == InkTool.Eraser && !_touchActive)
+        {
+            _eraserActive = true;
+            RootGrid.CaptureMouse();
+            EraseAt(e.GetPosition(RootGrid));
+            e.Handled = true;
+            return;
+        }
+
         var isPanButton = e.ChangedButton == MouseButton.Middle
             || (e.ChangedButton == MouseButton.Left && ActiveTool == InkTool.Select);
         if (isPanButton)
@@ -867,6 +909,12 @@ public partial class InfiniteCanvas : UserControl
 
     private void OnMouseMove(object sender, MouseEventArgs e)
     {
+        if (_eraserActive)
+        {
+            EraseAt(e.GetPosition(RootGrid));
+            e.Handled = true;
+            return;
+        }
         if (_textCreateActive && _editingTextElement is not null)
         {
             ResizeTextCreate(e.GetPosition(RootGrid));
@@ -884,10 +932,17 @@ public partial class InfiniteCanvas : UserControl
 
     private void OnMouseUp(object sender, MouseButtonEventArgs e)
     {
+        if (_eraserActive && e.ChangedButton == MouseButton.Left)
+        {
+            _eraserActive = false;
+            RootGrid.ReleaseMouseCapture();
+            e.Handled = true;
+            return;
+        }
         if (_textCreateActive)
         {
             _textCreateActive = false;
-            if (_editingTextElement is { Content: TextBox textBox })
+            if (_editingTextElement is { Content: RichTextBox textBox })
             {
                 FocusTextEditBox(textBox); // 拖动（或点击）结束后聚焦输入
             }
@@ -917,10 +972,231 @@ public partial class InfiniteCanvas : UserControl
     private void OnStrokeCollected(object? sender, InkCanvasStrokeCollectedEventArgs e)
     {
         var stroke = e.Stroke;
-        var strokes = ((InkCanvas)sender!).Strokes;
+        var ink = (InkCanvas)sender!;
+        if (ReferenceEquals(ink, _freeInk))
+        {
+            SplitFreeStroke(stroke);
+            return;
+        }
+        if (ReferenceEquals(ink, _liveInk))
+        {
+            SplitFreeStroke(ink, stroke);
+            return;
+        }
+        if (_inkPageIndex.TryGetValue(ink, out var pageIndex))
+        {
+            SplitPageStroke(ink, pageIndex, stroke);
+            return;
+        }
+        var strokes = ink.Strokes;
         RecordUndo(
             undo: () => strokes.Remove(stroke),
             redo: () => strokes.Add(stroke));
+    }
+
+    /// <summary>把点序列按区域切分为连续段（段内点属于同一区域）。</summary>
+    private static List<List<StylusPoint>> SplitByRegion(
+        StylusPointCollection points,
+        Func<StylusPoint, bool> inRegion)
+    {
+        var segments = new List<List<StylusPoint>>();
+        List<StylusPoint>? current = null;
+        var currentIn = false;
+        foreach (var point in points)
+        {
+            var inside = inRegion(point);
+            if (current is null || inside != currentIn)
+            {
+                current = new List<StylusPoint>();
+                segments.Add(current);
+                currentIn = inside;
+            }
+            current.Add(point);
+        }
+        return segments;
+    }
+
+    /// <summary>页面笔划跨出页面边界时拆分：页面内段留在页面，页面外段转入自由画布。</summary>
+    private void SplitPageStroke(InkCanvas pageInk, int pageIndex, Stroke stroke)
+    {
+        var page = _pageElements[pageIndex];
+        var pageWidth = page.ActualWidth;
+        var pageHeight = page.ActualHeight;
+        var top = Canvas.GetTop(page);
+        var freeOffset = FreeInkLayerSize / 2;
+
+        bool InPage(StylusPoint p) =>
+            p.X >= -0.5 && p.X <= pageWidth + 0.5
+            && p.Y >= -0.5 && p.Y <= pageHeight + 0.5;
+
+        var segments = SplitByRegion(stroke.StylusPoints, InPage);
+        var added = new List<(InkCanvas Ink, Stroke Stroke)>();
+        foreach (var segment in segments)
+        {
+            if (segment.Count == 0)
+            {
+                continue;
+            }
+            if (InPage(segment[0]))
+            {
+                added.Add((pageInk, new Stroke(new StylusPointCollection(segment), stroke.DrawingAttributes)));
+            }
+            else
+            {
+                var points = new StylusPointCollection();
+                foreach (var p in segment)
+                {
+                    points.Add(new StylusPoint(p.X + freeOffset + page.BorderThickness.Left, p.Y + top + freeOffset + page.BorderThickness.Top, p.PressureFactor));
+                }
+                added.Add((_freeInk!, new Stroke(points, stroke.DrawingAttributes)));
+            }
+        }
+
+        pageInk.Strokes.Remove(stroke);
+        foreach (var (target, s) in added)
+        {
+            target.Strokes.Add(s);
+        }
+        RecordUndo(
+            undo: () =>
+            {
+                pageInk.Strokes.Add(stroke);
+                foreach (var (target, s) in added)
+                {
+                    target.Strokes.Remove(s);
+                }
+            },
+            redo: () =>
+            {
+                pageInk.Strokes.Remove(stroke);
+                foreach (var (target, s) in added)
+                {
+                    target.Strokes.Add(s);
+                }
+            });
+    }
+
+    /// <summary>自由画布笔划进入页面区域时拆分：页面内段转入对应页面，其余留在自由画布。</summary>
+    private void SplitFreeStroke(Stroke stroke) => SplitFreeStroke(_freeInk!, stroke);
+
+    private void SplitFreeStroke(InkCanvas source, Stroke stroke)
+    {
+        var freeOffset = FreeInkLayerSize / 2;
+        var points = stroke.StylusPoints;
+        var assignments = new List<int?>(points.Count);
+        foreach (var p in points)
+        {
+            int? owner = null;
+            foreach (var (pageIndex, element) in _pageElements)
+            {
+                var left = Canvas.GetLeft(element);
+                var top = Canvas.GetTop(element);
+                var localX = p.X - freeOffset - left - element.BorderThickness.Left;
+                var localY = p.Y - freeOffset - top - element.BorderThickness.Top;
+                if (localX >= -0.5 && localX <= element.ActualWidth + 0.5
+                    && localY >= -0.5 && localY <= element.ActualHeight + 0.5)
+                {
+                    owner = pageIndex;
+                    break;
+                }
+            }
+            assignments.Add(owner);
+        }
+
+        var segments = new List<(int? Owner, List<StylusPoint> Segment)>();
+        for (var i = 0; i < points.Count; i++)
+        {
+            var owner = assignments[i];
+            if (segments.Count == 0 || segments[^1].Owner != owner)
+            {
+                segments.Add((owner, new List<StylusPoint>()));
+            }
+            segments[^1].Segment.Add(points[i]);
+        }
+
+        var added = new List<(InkCanvas Ink, Stroke Stroke)>();
+        foreach (var (owner, segment) in segments)
+        {
+            if (segment.Count == 0)
+            {
+                continue;
+            }
+            if (owner is int pageIndex)
+            {
+                var element = _pageElements[pageIndex];
+                var converted = new StylusPointCollection();
+                foreach (var p in segment)
+                {
+                    converted.Add(new StylusPoint(
+                        p.X - freeOffset - Canvas.GetLeft(element) - element.BorderThickness.Left,
+                        p.Y - freeOffset - Canvas.GetTop(element) - element.BorderThickness.Top,
+                        p.PressureFactor));
+                }
+                added.Add((_inkCanvases[pageIndex], new Stroke(converted, stroke.DrawingAttributes)));
+            }
+            else
+            {
+                added.Add((_freeInk!, new Stroke(new StylusPointCollection(segment), stroke.DrawingAttributes)));
+            }
+        }
+
+        source.Strokes.Remove(stroke);
+        foreach (var (target, s) in added)
+        {
+            target.Strokes.Add(s);
+        }
+        RecordUndo(
+            undo: () =>
+            {
+                source.Strokes.Add(stroke);
+                foreach (var (target, s) in added)
+                {
+                    target.Strokes.Remove(s);
+                }
+            },
+            redo: () =>
+            {
+                source.Strokes.Remove(stroke);
+                foreach (var (target, s) in added)
+                {
+                    target.Strokes.Add(s);
+                }
+            });
+    }
+
+    /// <summary>手动橡皮擦：以根坐标位置为中心，同时命中自由画布与所有页面图层（跨边界连续擦除）。</summary>
+    private void EraseAt(Point rootPosition)
+    {
+        var diameter = EraserWidth;
+        if (_freeInk is not null)
+        {
+            EraseStrokesAt(_freeInk, RootGrid.TranslatePoint(rootPosition, _freeInk), diameter);
+        }
+        foreach (var (pageIndex, element) in _pageElements)
+        {
+            if (!_inkCanvases.TryGetValue(pageIndex, out var ink))
+            {
+                continue;
+            }
+            EraseStrokesAt(ink, RootGrid.TranslatePoint(rootPosition, ink), diameter);
+        }
+    }
+
+    /// <summary>擦除指定图层中与圆形区域相交的笔画，并逐笔记录撤销。</summary>
+    private void EraseStrokesAt(InkCanvas ink, Point local, double diameter)
+    {
+        var hits = ink.Strokes.HitTest(local, diameter);
+        if (hits.Count == 0)
+        {
+            return;
+        }
+        foreach (var stroke in hits.ToList())
+        {
+            ink.Strokes.Remove(stroke);
+            RecordUndo(
+                undo: () => ink.Strokes.Add(stroke),
+                redo: () => ink.Strokes.Remove(stroke));
+        }
     }
 
     private void OnStrokeErasing(object? sender, InkCanvasStrokeErasingEventArgs e)
@@ -1131,6 +1407,11 @@ public partial class InfiniteCanvas : UserControl
         {
             _freeInk.EditingMode = InkCanvasEditingMode.None;
         }
+        if (_liveInk is not null)
+        {
+            _liveInk.EditingMode = InkCanvasEditingMode.None;
+            _liveInk.IsHitTestVisible = false;
+        }
     }
 
     private void UpdateEditingState()
@@ -1143,17 +1424,27 @@ public partial class InfiniteCanvas : UserControl
         {
             ApplyToolToInk(_freeInk);
         }
+        if (_liveInk is not null)
+        {
+            ApplyToolToInk(_liveInk);
+        }
     }
 
     private void ApplyToolToInk(InkCanvas ink)
     {
-        var editingMode = _touchActive || ActiveTool is InkTool.Select or InkTool.Text
-            ? InkCanvasEditingMode.None
+        if (ReferenceEquals(ink, _liveInk))
+        {
+            var drawing = !_touchActive && ActiveTool is InkTool.Pen or InkTool.Highlighter;
+            ink.IsHitTestVisible = drawing;
+            ink.EditingMode = drawing ? InkCanvasEditingMode.Ink : InkCanvasEditingMode.None;
+            ink.DefaultDrawingAttributes = CreateDrawingAttributes();
+            return;
+        }
+        var editingMode = _touchActive || ActiveTool is InkTool.Select or InkTool.Text or InkTool.Eraser
+            ? InkCanvasEditingMode.None // 橡皮擦由 OnMouseDown/Move 手动跨层处理，避免只能擦当前图层
             : ActiveTool == InkTool.Lasso
                 ? InkCanvasEditingMode.Select
-                : ActiveTool == InkTool.Eraser
-                    ? InkCanvasEditingMode.EraseByStroke
-                    : InkCanvasEditingMode.Ink;
+                : InkCanvasEditingMode.Ink;
 
         ink.EditingMode = editingMode;
         ink.DefaultDrawingAttributes = CreateDrawingAttributes();

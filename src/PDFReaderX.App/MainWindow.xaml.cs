@@ -187,6 +187,56 @@ public partial class MainWindow : Window
         _bookmarksDirty = false;
     }
 
+    private void OnPenColorSwatchClick(object sender, MouseButtonEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel
+            && sender is FrameworkElement element
+            && element.DataContext is Color color)
+        {
+            viewModel.PenColor = color;
+        }
+    }
+
+    private void OnPenWidthClick(object sender, MouseButtonEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel
+            && sender is FrameworkElement element
+            && element.DataContext is double width)
+        {
+            viewModel.PenWidth = width;
+        }
+    }
+
+    private void OnHighlightColorSwatchClick(object sender, MouseButtonEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel
+            && sender is FrameworkElement element
+            && element.DataContext is Color color)
+        {
+            viewModel.HighlightColor = color;
+        }
+    }
+
+    private void OnHighlightWidthClick(object sender, MouseButtonEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel
+            && sender is FrameworkElement element
+            && element.DataContext is double width)
+        {
+            viewModel.HighlightWidth = width;
+        }
+    }
+
+    private void OnEraserWidthClick(object sender, MouseButtonEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel
+            && sender is FrameworkElement element
+            && element.DataContext is double width)
+        {
+            viewModel.EraserWidth = width;
+        }
+    }
+
     private void OnBookmarksChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
         _bookmarksDirty = true;
@@ -312,6 +362,40 @@ public partial class MainWindow : Window
     private void OnRedoClick(object sender, RoutedEventArgs e)
     {
         Canvas.Redo();
+    }
+
+    /// <summary>字号输入框回车：解析自定义字号并应用。</summary>
+    private void OnFontSizePreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            ApplyFontSizeInput((ComboBox)sender);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>字号输入框失焦：解析自定义字号并应用。</summary>
+    private void OnFontSizeLostFocus(object sender, RoutedEventArgs e)
+    {
+        ApplyFontSizeInput((ComboBox)sender);
+    }
+
+    /// <summary>解析字号输入（6~144），更新 ViewModel 并回显当前值。</summary>
+    private void ApplyFontSizeInput(ComboBox combo)
+    {
+        if (DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+        if (double.TryParse(combo.Text, out var size))
+        {
+            size = Math.Clamp(size, 6, 144);
+            if (Math.Abs(size - viewModel.TextFontSize) > 0.01)
+            {
+                viewModel.TextFontSize = size;
+            }
+        }
+        combo.Text = viewModel.TextFontSize.ToString("0.##");
     }
 
     private void OnBoldClick(object sender, RoutedEventArgs e)
