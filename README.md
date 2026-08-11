@@ -2,7 +2,7 @@
 
 > OneNote 风格的 PDF 阅读与手写批注工具 · WPF / .NET 8
 
-![版本](https://img.shields.io/badge/版本-v1.0.1-2D6CDF?style=flat-square)
+![版本](https://img.shields.io/badge/版本-v1.0.2-2D6CDF?style=flat-square)
 ![框架](https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square)
 ![平台](https://img.shields.io/badge/平台-Windows%2010%2F11%20x64-0078D6?style=flat-square)
 
@@ -55,7 +55,7 @@
 从 [GitHub Releases](https://github.com/yeguoyy/PDFReader-X/releases) 获取：
 
 - `PDFReaderX-win-x64.zip` —— 免安装，解压即用
-- `PDFReaderX-Setup-1.0.1.exe` —— 安装包
+- `PDFReaderX-Setup-1.0.2.exe` —— 安装包
 
 > 自包含单文件，无需额外安装 .NET 运行时。
 
@@ -121,7 +121,7 @@ PDFReaderX.App.exe "文档.pdf"
 # 免安装单文件包：dist/PDFReaderX-win-x64.zip
 .\scripts\publish.ps1 pack
 
-# 安装包：dist/installer/PDFReaderX-Setup-1.0.1.exe（需先安装 Inno Setup 6）
+# 安装包：dist/installer/PDFReaderX-Setup-1.0.2.exe（需先安装 Inno Setup 6）
 .\scripts\publish.ps1 dist
 ```
 
@@ -140,6 +140,16 @@ PDFReaderX.sln
 ```
 
 ## 📝 更新日志
+
+### v1.0.2
+
+- 新增 Paint 风格颜色面板：笔触预览、粗细调节、最近颜色、屏幕取色器
+- 新增快捷笔列表：新建 / 删除 / 长按拖动排序，配置自动保存
+- 工具栏图标化：撤销 / 重做置左，选择、文本、套索图标，钢笔与荧光笔视觉区分
+- 套索图标更新为虚线圆环样式，按钮顺序调整为 撤销 → 重做 → 选择 → 套索 → 快捷笔
+- 修复跨图层墨迹连接：PDF 页面边框移至墨迹之下，跨边界自动求交无缝衔接
+- 修复非 100% 缩放下第二页跨图层笔迹坐标偏移
+- 修复新建快捷笔对话框崩溃
 
 ### v1.0.1
 
