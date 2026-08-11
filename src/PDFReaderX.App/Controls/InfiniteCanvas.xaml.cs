@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Controls;
@@ -98,6 +98,7 @@ public partial class InfiniteCanvas : UserControl
         new PropertyMetadata(0.0));
 
     private readonly Dictionary<int, Border> _pageElements = new();
+    private readonly Dictionary<int, Border> _pageFrames = new();
     private readonly Dictionary<int, InkCanvas> _inkCanvases = new();
     private readonly Dictionary<InkCanvas, int> _inkPageIndex = new();
     private InkCanvas? _freeInk;
@@ -364,6 +365,10 @@ public partial class InfiniteCanvas : UserControl
                 {
                     ViewportCanvas.Children.Remove(removed);
                 }
+                if (_pageFrames.Remove(page.PageIndex, out var frame))
+                {
+                    ViewportCanvas.Children.Remove(frame);
+                }
                 _inkCanvases.Remove(page.PageIndex);
                 _imagesByPage.Remove(page.PageIndex);
             }
@@ -424,6 +429,7 @@ public partial class InfiniteCanvas : UserControl
         _freeInk = null;
         _liveInk = null;
         _pageElements.Clear();
+        _pageFrames.Clear();
         _inkCanvases.Clear();
         _inkPageIndex.Clear();
         _imagesByPage.Clear();
@@ -475,7 +481,7 @@ public partial class InfiniteCanvas : UserControl
         Canvas.SetTop(ink, -size / 2);
         // 缩放以画布中心（世界原点）为锚点，保证自由墨迹与页面墨迹缩放时不发生相对漂移
         ink.RenderTransformOrigin = new Point(0.5, 0.5);
-        Panel.SetZIndex(ink, int.MinValue);
+        Panel.SetZIndex(ink, int.MinValue + 1);
         ink.PreviewTouchDown += OnInkPreviewTouchDown;
         ink.StrokeCollected += OnStrokeCollected;
         ink.StrokeErasing += OnStrokeErasing;
@@ -530,13 +536,28 @@ public partial class InfiniteCanvas : UserControl
         var border = new Border
         {
             Background = Brushes.White,
-            BorderBrush = new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC)),
-            BorderThickness = new Thickness(1),
+            BorderBrush = Brushes.Transparent, // 边框线移到底层页面框，避免切断跨边界墨迹
+            BorderThickness = new Thickness(1), // 保留内容偏移，维持墨迹坐标系不变
             Child = grid,
             Width = page.BaseWidth,
             Height = page.BaseHeight,
             RenderTransform = new ScaleTransform(Zoom, Zoom),
         };
+
+        // 页面边框独立为最底层元素：跨页笔迹可覆盖边框线，连接处渲染连贯
+        var frame = new Border
+        {
+            Background = null,
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC)),
+            BorderThickness = new Thickness(2), // 内半被页面内容盖住，视觉保留 1px
+            Width = page.BaseWidth,
+            Height = page.BaseHeight,
+            IsHitTestVisible = false,
+            RenderTransform = new ScaleTransform(Zoom, Zoom),
+        };
+        Panel.SetZIndex(frame, int.MinValue);
+        ViewportCanvas.Children.Add(frame);
+        _pageFrames[page.PageIndex] = frame;
 
         ApplyToolToInk(ink);
         _inkCanvases[page.PageIndex] = ink;
@@ -607,6 +628,12 @@ public partial class InfiniteCanvas : UserControl
             Canvas.SetLeft(element, 0);
             Canvas.SetTop(element, offsets[i]);
             element.RenderTransform = new ScaleTransform(Zoom, Zoom);
+            if (_pageFrames.TryGetValue(page.PageIndex, out var frame))
+            {
+                Canvas.SetLeft(frame, 0);
+                Canvas.SetTop(frame, offsets[i]);
+                frame.RenderTransform = new ScaleTransform(Zoom, Zoom);
+            }
         }
         UpdatePanTransform();
         UpdateScrollState();
@@ -1029,26 +1056,91 @@ public partial class InfiniteCanvas : UserControl
             redo: () => strokes.Add(stroke));
     }
 
-    /// <summary>把点序列按区域切分为连续段（段内点属于同一区域）。</summary>
+    /// <summary>把点序列按区域切分为连续段（段内点属于同一区域）；段边界处插入与区域边界的交点，保证跨边界线段连续。</summary>
     private static List<List<StylusPoint>> SplitByRegion(
         StylusPointCollection points,
-        Func<StylusPoint, bool> inRegion)
+        Func<StylusPoint, bool> inRegion,
+        Rect bounds)
     {
         var segments = new List<List<StylusPoint>>();
         List<StylusPoint>? current = null;
         var currentIn = false;
+        StylusPoint? prev = null;
         foreach (var point in points)
         {
             var inside = inRegion(point);
-            if (current is null || inside != currentIn)
+            if (current is null)
             {
                 current = new List<StylusPoint>();
                 segments.Add(current);
                 currentIn = inside;
             }
+            else if (inside != currentIn)
+            {
+                var hit = IntersectSegment(prev!.Value, point, bounds);
+                if (hit is StylusPoint ip)
+                {
+                    current.Add(ip);
+                    current = new List<StylusPoint> { ip };
+                    segments.Add(current);
+                }
+                else
+                {
+                    current = new List<StylusPoint>();
+                    segments.Add(current);
+                }
+                currentIn = inside;
+            }
             current.Add(point);
+            prev = point;
         }
         return segments;
+    }
+
+    /// <summary>求线段 a→b 与矩形边界的第一个交点（t 最小），无交点返回 null。</summary>
+    private static StylusPoint? IntersectSegment(StylusPoint a, StylusPoint b, Rect bounds)
+    {
+        double bestT = 1.0;
+        StylusPoint? best = null;
+        void Check(double t)
+        {
+            if (t > 0.0 && t < 1.0 && t < bestT)
+            {
+                bestT = t;
+                best = new StylusPoint(
+                    a.X + (b.X - a.X) * t,
+                    a.Y + (b.Y - a.Y) * t,
+                    (float)(a.PressureFactor + (b.PressureFactor - a.PressureFactor) * t));
+            }
+        }
+        if (b.X != a.X)
+        {
+            Check((bounds.Left - a.X) / (b.X - a.X));
+            Check((bounds.Right - a.X) / (b.X - a.X));
+        }
+        if (b.Y != a.Y)
+        {
+            Check((bounds.Top - a.Y) / (b.Y - a.Y));
+            Check((bounds.Bottom - a.Y) / (b.Y - a.Y));
+        }
+        return best;
+    }
+
+    /// <summary>求自由坐标系线段与指定页面判定边界（含 0.5 容差）的交点。</summary>
+    private StylusPoint? TryIntersectPage(StylusPoint a, StylusPoint b, int? pageIndex, double freeOffset)
+    {
+        if (pageIndex is not int idx || !_pageElements.TryGetValue(idx, out var element))
+        {
+            return null;
+        }
+        var left = Canvas.GetLeft(element);
+        var top = Canvas.GetTop(element);
+        var bounds = new Rect(
+            left + freeOffset + 1 - 0.5,
+            top / Zoom + freeOffset + 1 - 0.5,
+            element.ActualWidth + 1,
+            element.ActualHeight + 1);
+        return IntersectSegment(a, b, bounds);
     }
 
     /// <summary>页面笔划跨出页面边界时拆分：页面内段留在页面，页面外段转入自由画布。</summary>
@@ -1057,14 +1149,15 @@ public partial class InfiniteCanvas : UserControl
         var page = _pageElements[pageIndex];
         var pageWidth = page.ActualWidth;
         var pageHeight = page.ActualHeight;
-        var top = Canvas.GetTop(page);
+        var top = Canvas.GetTop(page) / Zoom;
         var freeOffset = FreeInkLayerSize / 2;
 
         bool InPage(StylusPoint p) =>
             p.X >= -0.5 && p.X <= pageWidth + 0.5
             && p.Y >= -0.5 && p.Y <= pageHeight + 0.5;
 
-        var segments = SplitByRegion(stroke.StylusPoints, InPage);
+        var bounds = new Rect(-0.5, -0.5, pageWidth + 1, pageHeight + 1);
+        var segments = SplitByRegion(stroke.StylusPoints, InPage, bounds);
         var added = new List<(InkCanvas Ink, Stroke Stroke)>();
         foreach (var segment in segments)
         {
@@ -1072,7 +1165,7 @@ public partial class InfiniteCanvas : UserControl
             {
                 continue;
             }
-            if (InPage(segment[0]))
+            if (InPage(segment[^1]))
             {
                 added.Add((pageInk, new Stroke(new StylusPointCollection(segment), stroke.DrawingAttributes)));
             }
@@ -1086,6 +1179,7 @@ public partial class InfiniteCanvas : UserControl
                 added.Add((_freeInk!, new Stroke(points, stroke.DrawingAttributes)));
             }
         }
+
 
         pageInk.Strokes.Remove(stroke);
         foreach (var (target, s) in added)
@@ -1127,7 +1221,7 @@ public partial class InfiniteCanvas : UserControl
                 var left = Canvas.GetLeft(element);
                 var top = Canvas.GetTop(element);
                 var localX = p.X - freeOffset - left - element.BorderThickness.Left;
-                var localY = p.Y - freeOffset - top - element.BorderThickness.Top;
+                var localY = p.Y - freeOffset - top / Zoom - element.BorderThickness.Top;
                 if (localX >= -0.5 && localX <= element.ActualWidth + 0.5
                     && localY >= -0.5 && localY <= element.ActualHeight + 0.5)
                 {
@@ -1142,9 +1236,23 @@ public partial class InfiniteCanvas : UserControl
         for (var i = 0; i < points.Count; i++)
         {
             var owner = assignments[i];
-            if (segments.Count == 0 || segments[^1].Owner != owner)
+            if (segments.Count == 0)
             {
                 segments.Add((owner, new List<StylusPoint>()));
+            }
+            else if (segments[^1].Owner != owner)
+            {
+                // 跨边界：线段与页面边界求交，交点补进两侧段，保证跨页墨迹连续
+                var hit = TryIntersectPage(points[i - 1], points[i], segments[^1].Owner ?? owner, freeOffset);
+                if (hit is StylusPoint ip)
+                {
+                    segments[^1].Segment.Add(ip);
+                    segments.Add((owner, new List<StylusPoint> { ip }));
+                }
+                else
+                {
+                    segments.Add((owner, new List<StylusPoint>()));
+                }
             }
             segments[^1].Segment.Add(points[i]);
         }
@@ -1164,7 +1272,7 @@ public partial class InfiniteCanvas : UserControl
                 {
                     converted.Add(new StylusPoint(
                         p.X - freeOffset - Canvas.GetLeft(element) - element.BorderThickness.Left,
-                        p.Y - freeOffset - Canvas.GetTop(element) - element.BorderThickness.Top,
+                        p.Y - freeOffset - Canvas.GetTop(element) / Zoom - element.BorderThickness.Top,
                         p.PressureFactor));
                 }
                 added.Add((_inkCanvases[pageIndex], new Stroke(converted, stroke.DrawingAttributes)));
@@ -1174,6 +1282,7 @@ public partial class InfiniteCanvas : UserControl
                 added.Add((_freeInk!, new Stroke(new StylusPointCollection(segment), stroke.DrawingAttributes)));
             }
         }
+
 
         source.Strokes.Remove(stroke);
         foreach (var (target, s) in added)

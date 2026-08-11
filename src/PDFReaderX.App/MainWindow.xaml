@@ -17,6 +17,28 @@
         <converters:EnumToVisibilityConverter x:Key="EnumToVis"/>
         <converters:EqualityToVisibilityConverter x:Key="EqualityToVis"/>
         <converters:WidthToDotSizeConverter x:Key="WidthToDot"/>
+        <converters:QuickPenSelectedConverter x:Key="QuickPenSelected"/>
+
+        <!-- 快捷笔图标：钢笔（细长笔身+尖笔尖） -->
+        <DataTemplate x:Key="QuickPenIconPen">
+            <Grid Width="26" Height="26">
+                <Path Data="M 4 24 L 13 15 L 15 17 L 6 26 Z" Fill="#FF9A9A9A"/>
+                <Path Data="M 13 15 L 22 6 L 15 17 Z" Fill="{Binding Color, Converter={StaticResource ColorToBrush}}"/>
+                <Path Data="M 13 15 L 17.5 10.5" Stroke="White" StrokeThickness="0.9" Opacity="0.75"/>
+            </Grid>
+        </DataTemplate>
+
+        <!-- 快捷笔图标：荧光笔（宽扁笔头马克笔） -->
+        <DataTemplate x:Key="QuickPenIconHighlighter">
+            <Grid Width="26" Height="26">
+                <Path Data="M 2 22 L 10 14 L 15 19 L 7 27 Z" Fill="#FFB8C8E2"/>
+                <Path Data="M 10 14 L 19 5 L 24 10 L 15 19 Z" Fill="{Binding Color, Converter={StaticResource ColorToBrush}}" Opacity="0.55"/>
+                <Path Data="M 10 14 L 15 19" Stroke="#FF7A8AA5" StrokeThickness="1"/>
+            </Grid>
+        </DataTemplate>
+        <controls:QuickPenIconSelector x:Key="QuickPenIconSelector"
+                                       PenTemplate="{StaticResource QuickPenIconPen}"
+                                       HighlighterTemplate="{StaticResource QuickPenIconHighlighter}"/>
         <Style x:Key="InkToolButton" TargetType="RadioButton">
             <Setter Property="Margin" Value="2,2"/>
             <Setter Property="Padding" Value="10,4"/>
@@ -45,6 +67,84 @@
                                 <Setter TargetName="ToolBg" Property="Background" Value="#FF2D6CDF"/>
                                 <Setter TargetName="ToolContent" Property="TextElement.Foreground" Value="White"/>
                             </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="QuickPenButton" TargetType="Button">
+            <Setter Property="Margin" Value="1,2"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="BtnBg" Background="{TemplateBinding Background}" CornerRadius="3">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="BtnBg" Property="Background" Value="#FFE8F0FE"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="BtnBg" Property="Background" Value="#FFC9DDF8"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="QuickPenAddButton" TargetType="Button">
+            <Setter Property="Width" Value="26"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Margin" Value="1,2"/>
+            <Setter Property="FontSize" Value="17"/>
+            <Setter Property="Foreground" Value="#FF888888"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="BtnBg" Background="{TemplateBinding Background}" CornerRadius="3">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="BtnBg" Property="Background" Value="#FFE8F0FE"/>
+                                <Setter Property="Foreground" Value="#FF2D6CDF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="BtnBg" Property="Background" Value="#FFC9DDF8"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ToolArrowButton" TargetType="ToggleButton">
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Margin" Value="0,2,2,0"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="3">
+                            <Path x:Name="Arrow" Data="M 0,0 L 5,0 L 2.5,3.5 Z" Fill="#FF777777"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#FFE0E0E0"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#FF2D6CDF"/>
+                                <Setter TargetName="Arrow" Property="Fill" Value="White"/>
+                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -166,36 +266,184 @@
 
 
                 <Grid x:Name="DrawingToolbar" Grid.Row="1" Background="#FFF8F8F8">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
             <StackPanel Orientation="Horizontal" Margin="6,4">
-                <RadioButton Content="选择" Style="{StaticResource InkToolButton}" GroupName="InkTool"
+                <Button x:Name="UndoButton" Style="{StaticResource ToolbarButton}" IsEnabled="False" Click="OnUndoClick"
+                        ToolTip="撤销上一步操作 (Ctrl+Z)">
+                    <Viewbox Width="16" Height="16">
+                        <Path Data="M12.5,8c-2.65,0 -5.05,0.99 -6.9,2.6L2,7v9h9l-3.62,-3.62c1.39,-1.16 3.16,-1.88 5.12,-1.88 3.54,0 6.55,2.31 7.6,5.5l2.37,-0.78C21.08,11.03 17.15,8 12.5,8z"
+                              Fill="#FF444444"/>
+                    </Viewbox>
+                </Button>
+                <Button x:Name="RedoButton" Style="{StaticResource ToolbarButton}" IsEnabled="False" Click="OnRedoClick"
+                        ToolTip="重做已撤销的操作 (Ctrl+Y)">
+                    <Viewbox Width="16" Height="16">
+                        <Path Data="M18.4,10.6C16.55,8.99 14.15,8 11.5,8c-4.65,0 -8.58,3.03 -9.96,7.22L3.9,16c1.05,-3.19 4.05,-5.5 7.6,-5.5 1.95,0 3.73,0.72 5.12,1.88L13,16h9V7L18.4,10.6z"
+                              Fill="#FF444444"/>
+                    </Viewbox>
+                </Button>
+                <Border Width="1" Height="24" Background="#FFD9D9D9" Margin="4,0"/>
+                <RadioButton Style="{StaticResource InkToolButton}" GroupName="InkTool"
                              IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Select}"
-                             ToolTip="选择/移动元素"/>
-                <RadioButton Content="钢笔" Style="{StaticResource InkToolButton}" GroupName="InkTool"
-                             IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Pen}"
-                             ToolTip="手写笔迹"/>
-                <RadioButton Content="荧光笔" Style="{StaticResource InkToolButton}" GroupName="InkTool"
-                             IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Highlighter}"
-                             ToolTip="荧光笔标注"/>
-                <RadioButton Content="橡皮擦" Style="{StaticResource InkToolButton}" GroupName="InkTool"
-                             IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Eraser}"
-                             ToolTip="擦除墨迹"/>
-                <RadioButton Content="文本" Style="{StaticResource InkToolButton}" GroupName="InkTool"
-                             IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Text}"
-                             ToolTip="点击画布插入文本框，回车确认、Esc 取消"/>
-                <RadioButton Content="套索" Style="{StaticResource InkToolButton}" GroupName="InkTool"
+                             ToolTip="选择/移动元素">
+                    <Viewbox Width="17" Height="17">
+                        <Path Data="M5.5,3.5 L5.5,19.5 L10,15.5 L12.7,21.5 L14.9,20.5 L12.2,14.5 L16,14.5 Z" Fill="#FF444444"/>
+                    </Viewbox>
+                </RadioButton>
+                <RadioButton Style="{StaticResource InkToolButton}" GroupName="InkTool"
                              IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Lasso}"
-                             ToolTip="圈选墨迹笔划，Delete 删除选中的笔划"/>
+                             ToolTip="套索：圈选墨迹笔划，Delete 删除选中的笔划">
+                    <Viewbox Width="17" Height="17">
+                        <Grid Width="16" Height="16">
+                            <Path Data="M 2.5 8 A 5.5 5.5 0 1 0 13.5 8 A 5.5 5.5 0 1 0 2.5 8"
+                                  Stroke="#FF444444" StrokeThickness="1.5" StrokeDashArray="1.9 1.5"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" Fill="Transparent"/>
+                            <Path Data="M 11.9 11.9 C 12.6 12.9 13.4 13.9 14.1 14.8"
+                                  Stroke="#FF444444" StrokeThickness="1.5" StrokeDashArray="1.9 1.5"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" Fill="Transparent"/>
+                        </Grid>
+                    </Viewbox>
+                </RadioButton>
+                <Border Width="1" Height="24" Background="#FFD9D9D9" Margin="4,0"/>
+                <ItemsControl x:Name="QuickPensPanel" ItemsSource="{Binding QuickPens}" Margin="2,0">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Style="{StaticResource QuickPenButton}" Tag="{Binding}"
+                                    ToolTip="{Binding Name, StringFormat={}{0}（长按可拖动排序）}"
+                                    PreviewMouseLeftButtonDown="OnQuickPenPreviewMouseDown"
+                                    PreviewMouseMove="OnQuickPenPreviewMouseMove"
+                                    PreviewMouseLeftButtonUp="OnQuickPenPreviewMouseUp">
+                                <Button.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="删除这支笔" Click="OnDeleteQuickPenClick"/>
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                                <Grid Width="26" Height="28">
+                                    <Border x:Name="SelBg" Background="#FF2D6CDF" CornerRadius="3" Margin="-3">
+                                        <Border.Visibility>
+                                            <MultiBinding Converter="{StaticResource QuickPenSelected}">
+                                                <Binding Path="Tool"/>
+                                                <Binding Path="Color"/>
+                                                <Binding Path="Width"/>
+                                                <Binding Path="DataContext.ActiveTool" RelativeSource="{RelativeSource AncestorType=Window}"/>
+                                                <Binding Path="DataContext.PenColor" RelativeSource="{RelativeSource AncestorType=Window}"/>
+                                                <Binding Path="DataContext.PenWidth" RelativeSource="{RelativeSource AncestorType=Window}"/>
+                                                <Binding Path="DataContext.HighlightColor" RelativeSource="{RelativeSource AncestorType=Window}"/>
+                                                <Binding Path="DataContext.HighlightWidth" RelativeSource="{RelativeSource AncestorType=Window}"/>
+                                            </MultiBinding>
+                                        </Border.Visibility>
+                                    </Border>
+                                    <ContentControl Content="{Binding}" ContentTemplateSelector="{StaticResource QuickPenIconSelector}"
+                                                    Width="26" Height="26" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <Path Data="M 3.5,14 L 7.5,18 L 14.5,9" Stroke="White" StrokeThickness="1.8"
+                                          HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,3,3"
+                                          Visibility="{Binding Visibility, ElementName=SelBg}"/>
+                                </Grid>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Button Style="{StaticResource QuickPenAddButton}" Content="+" Click="OnAddQuickPenClick"
+                        ToolTip="新建一支笔（颜色/粗细可自定义）"/>
+                <Border Width="1" Height="24" Background="#FFD9D9D9" Margin="4,0"/>
+                <Grid Margin="2,2">
+                    <RadioButton Style="{StaticResource InkToolButton}" GroupName="InkTool"
+                                 IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Pen}"
+                                 ToolTip="手写笔迹；点右下角箭头调整颜色与粗细">
+                        <StackPanel Orientation="Horizontal">
+                            <Viewbox Width="18" Height="18">
+                                <Grid Width="16" Height="16">
+                                    <Path Data="M 2 14 L 8 8 L 10 10 L 4 16 Z" Fill="#FF9A9A9A"/>
+                                    <Path Data="M 8 8 L 14 2 L 10 10 Z" Fill="{Binding PenColor, Converter={StaticResource ColorToBrush}}"/>
+                                    <Path Data="M 8 8 L 10.5 5.5" Stroke="White" StrokeThickness="0.7" Opacity="0.75"/>
+                                </Grid>
+                            </Viewbox>
+
+                        </StackPanel>
+                    </RadioButton>
+                    <ToggleButton x:Name="PenArrow" Tag="Pen" Style="{StaticResource ToolArrowButton}" Click="OnToolArrowClick"
+                                  ToolTip="颜色与粗细设置"/>
+                    <Popup IsOpen="{Binding IsChecked, ElementName=PenArrow, Mode=TwoWay}" Placement="Bottom"
+                           PlacementTarget="{Binding ElementName=PenArrow}"
+                           AllowsTransparency="True" StaysOpen="False" PopupAnimation="Fade">
+                        <controls:InkToolOptionsPanel x:Name="PenPanel" PreviewKind="pen"
+                            CurrentColor="{Binding PenColor, Mode=OneWay}"
+                            CurrentWidth="{Binding PenWidth, Mode=OneWay}"
+                            WidthPresets="{Binding PenWidths}"
+                            ColorOptions="{Binding PenColors}"
+                            RecentColors="{Binding RecentColors}"
+                            ColorPicked="OnPenColorPicked" WidthPicked="OnPenWidthPicked"
+                            MoreColorsClicked="OnPenMoreColorsClicked" EyedropperClicked="OnPenEyedropperClicked"/>
+                    </Popup>
+                </Grid>
+                <Grid Margin="2,2">
+                    <RadioButton Style="{StaticResource InkToolButton}" GroupName="InkTool"
+                                 IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Highlighter}"
+                                 ToolTip="荧光笔标注；点右下角箭头调整颜色与粗细">
+                        <StackPanel Orientation="Horizontal">
+                            <Viewbox Width="18" Height="18">
+                                <Grid Width="16" Height="16">
+                                    <Path Data="M 1 13 L 6 8 L 9 11 L 4 16 Z" Fill="#FFB8C8E2"/>
+                                    <Path Data="M 6 8 L 11 3 L 14 6 L 9 11 Z" Fill="{Binding HighlightColor, Converter={StaticResource ColorToBrush}}" Opacity="0.55"/>
+                                </Grid>
+                            </Viewbox>
+
+                        </StackPanel>
+                    </RadioButton>
+                    <ToggleButton x:Name="HighlightArrow" Tag="Highlighter" Style="{StaticResource ToolArrowButton}" Click="OnToolArrowClick"
+                                  ToolTip="颜色与粗细设置"/>
+                    <Popup IsOpen="{Binding IsChecked, ElementName=HighlightArrow, Mode=TwoWay}" Placement="Bottom"
+                           PlacementTarget="{Binding ElementName=HighlightArrow}"
+                           AllowsTransparency="True" StaysOpen="False" PopupAnimation="Fade">
+                        <controls:InkToolOptionsPanel x:Name="HighlightPanel" PreviewKind="highlighter"
+                            CurrentColor="{Binding HighlightColor, Mode=OneWay}"
+                            CurrentWidth="{Binding HighlightWidth, Mode=OneWay}"
+                            WidthPresets="{Binding HighlightWidths}"
+                            ColorOptions="{Binding HighlightColors}"
+                            RecentColors="{Binding RecentColors}"
+                            ColorPicked="OnHighlightColorPicked" WidthPicked="OnHighlightWidthPicked"
+                            MoreColorsClicked="OnHighlightMoreColorsClicked" EyedropperClicked="OnHighlightEyedropperClicked"/>
+                    </Popup>
+                </Grid>
+                <Grid Margin="2,2">
+                    <RadioButton Style="{StaticResource InkToolButton}" GroupName="InkTool"
+                                 IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Eraser}"
+                                 ToolTip="擦除墨迹；点右下角箭头调整橡皮大小">
+                        <StackPanel Orientation="Horizontal">
+                            <Viewbox Width="18" Height="18">
+                                <Grid Width="16" Height="16">
+                                    <Path Data="M 2.5 9.5 L 7 5 L 13 11 L 8.5 15.5 Z" Fill="#FFE5A5B8"/>
+                                    <Path Data="M 8.5 15.5 L 13 11 L 14.5 12.5 L 10 17 Z" Fill="#FF7FA8D0"/>
+                                </Grid>
+                            </Viewbox>
+
+                        </StackPanel>
+                    </RadioButton>
+                    <ToggleButton x:Name="EraserArrow" Tag="Eraser" Style="{StaticResource ToolArrowButton}" Click="OnToolArrowClick"
+                                  ToolTip="橡皮大小设置"/>
+                    <Popup IsOpen="{Binding IsChecked, ElementName=EraserArrow, Mode=TwoWay}" Placement="Bottom"
+                           PlacementTarget="{Binding ElementName=EraserArrow}"
+                           AllowsTransparency="True" StaysOpen="False" PopupAnimation="Fade">
+                        <controls:InkToolOptionsPanel x:Name="EraserPanel" PreviewKind="eraser"
+                            CurrentWidth="{Binding EraserWidth, Mode=OneWay}"
+                            WidthPresets="{Binding EraserWidths}"
+                            WidthPicked="OnEraserWidthPicked"/>
+                    </Popup>
+                </Grid>
+                <RadioButton Style="{StaticResource InkToolButton}" GroupName="InkTool"
+                             IsChecked="{Binding ActiveTool, Converter={StaticResource EnumToBool}, ConverterParameter=Text}"
+                             ToolTip="点击画布插入文本框，回车确认、Esc 取消">
+                    <Viewbox Width="18" Height="18">
+                        <TextBlock Text="A" FontFamily="Georgia" FontWeight="Bold" FontSize="20"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Viewbox>
+                </RadioButton>
                 <Border Width="1" Height="24" Background="#FFD9D9D9" Margin="8,0"/>
                 <Button Content="图片" Style="{StaticResource ToolbarButton}" Click="OnInsertImageClick"
                         ToolTip="从文件插入图片到画布（也可 Ctrl+V 粘贴或直接拖入）"/>
-                <Button x:Name="UndoButton" Content="撤销" Style="{StaticResource ToolbarButton}" IsEnabled="False" Click="OnUndoClick"
-                        ToolTip="撤销上一步操作 (Ctrl+Z)"/>
-                <Button x:Name="RedoButton" Content="重做" Style="{StaticResource ToolbarButton}" IsEnabled="False" Click="OnRedoClick"
-                        ToolTip="重做已撤销的操作 (Ctrl+Y)"/>
+                
                 <Border Width="1" Height="24" Background="#FFD9D9D9" Margin="8,0"/>
                 <TextBlock Text="字号" VerticalAlignment="Center" Margin="6,0,2,0" Foreground="#FF333333"/>
                 <ComboBox Width="64" Style="{StaticResource FlatComboBox}" IsEditable="True" ItemsSource="{Binding TextFontSizes}"
@@ -214,146 +462,6 @@
                 <TextBlock Text="{Binding Zoom, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="44"
                            Foreground="#FF444444"/>
                 <Button Content="重置" Style="{StaticResource ToolbarButton}" Click="OnResetZoomClick"/>
-            </StackPanel>
-
-            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="10,0,4,6"
-                        Visibility="{Binding ActiveTool, Converter={StaticResource EnumToVis}, ConverterParameter=Pen}">
-                <TextBlock Text="钢笔" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#FF2D6CDF"/>
-                <ItemsControl ItemsSource="{Binding PenColors}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Grid Width="26" Height="26" Margin="2,0" Background="Transparent" Cursor="Hand"
-                                  MouseLeftButtonUp="OnPenColorSwatchClick" ToolTip="{Binding}">
-                                <Ellipse Fill="{Binding Converter={StaticResource ColorToBrush}}" Margin="3"
-                                         Stroke="#FFCCCCCC" StrokeThickness="1"/>
-                                <Ellipse Stroke="#FF2D6CDF" StrokeThickness="2" Margin="1">
-                                    <Ellipse.Visibility>
-                                        <MultiBinding Converter="{StaticResource EqualityToVis}">
-                                            <Binding Path="DataContext.PenColor" RelativeSource="{RelativeSource AncestorType=Window}"/>
-                                            <Binding/>
-                                        </MultiBinding>
-                                    </Ellipse.Visibility>
-                                </Ellipse>
-                            </Grid>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-                <Border Width="1" Height="22" Background="#FFD9D9D9" Margin="10,2"/>
-                <ItemsControl ItemsSource="{Binding PenWidths}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Grid Width="28" Height="28" Margin="2,0" Background="Transparent" Cursor="Hand"
-                                  MouseLeftButtonUp="OnPenWidthClick" ToolTip="{Binding}">
-                                <Ellipse Stroke="#FF999999" StrokeThickness="1"
-                                         Width="{Binding Converter={StaticResource WidthToDot}, ConverterParameter=pen}"
-                                         Height="{Binding Converter={StaticResource WidthToDot}, ConverterParameter=pen}">
-                                    <Ellipse.Fill>
-                                        <Binding Path="DataContext.PenColor" RelativeSource="{RelativeSource AncestorType=Window}"
-                                                 Converter="{StaticResource ColorToBrush}"/>
-                                    </Ellipse.Fill>
-                                </Ellipse>
-                                <Ellipse Stroke="#FF2D6CDF" StrokeThickness="2" Margin="2">
-                                    <Ellipse.Visibility>
-                                        <MultiBinding Converter="{StaticResource EqualityToVis}">
-                                            <Binding Path="DataContext.PenWidth" RelativeSource="{RelativeSource AncestorType=Window}"/>
-                                            <Binding/>
-                                        </MultiBinding>
-                                    </Ellipse.Visibility>
-                                </Ellipse>
-                            </Grid>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </StackPanel>
-
-            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="10,0,4,6"
-                        Visibility="{Binding ActiveTool, Converter={StaticResource EnumToVis}, ConverterParameter=Highlighter}">
-                <TextBlock Text="荧光笔" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#FF2D6CDF"/>
-                <ItemsControl ItemsSource="{Binding HighlightColors}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Grid Width="26" Height="26" Margin="2,0" Background="Transparent" Cursor="Hand"
-                                  MouseLeftButtonUp="OnHighlightColorSwatchClick" ToolTip="{Binding}">
-                                <Ellipse Fill="{Binding Converter={StaticResource ColorToBrush}}" Margin="3"
-                                         Stroke="#FFCCCCCC" StrokeThickness="1"/>
-                                <Ellipse Stroke="#FF2D6CDF" StrokeThickness="2" Margin="1">
-                                    <Ellipse.Visibility>
-                                        <MultiBinding Converter="{StaticResource EqualityToVis}">
-                                            <Binding Path="DataContext.HighlightColor" RelativeSource="{RelativeSource AncestorType=Window}"/>
-                                            <Binding/>
-                                        </MultiBinding>
-                                    </Ellipse.Visibility>
-                                </Ellipse>
-                            </Grid>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-                <Border Width="1" Height="22" Background="#FFD9D9D9" Margin="10,2"/>
-                <ItemsControl ItemsSource="{Binding HighlightWidths}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Grid Width="28" Height="28" Margin="2,0" Background="Transparent" Cursor="Hand"
-                                  MouseLeftButtonUp="OnHighlightWidthClick" ToolTip="{Binding}">
-                                <Ellipse Stroke="#FF999999" StrokeThickness="1"
-                                         Width="{Binding Converter={StaticResource WidthToDot}, ConverterParameter=highlighter}"
-                                         Height="{Binding Converter={StaticResource WidthToDot}, ConverterParameter=highlighter}">
-                                    <Ellipse.Fill>
-                                        <Binding Path="DataContext.HighlightColor" RelativeSource="{RelativeSource AncestorType=Window}"
-                                                 Converter="{StaticResource ColorToBrush}"/>
-                                    </Ellipse.Fill>
-                                </Ellipse>
-                                <Ellipse Stroke="#FF2D6CDF" StrokeThickness="2" Margin="2">
-                                    <Ellipse.Visibility>
-                                        <MultiBinding Converter="{StaticResource EqualityToVis}">
-                                            <Binding Path="DataContext.HighlightWidth" RelativeSource="{RelativeSource AncestorType=Window}"/>
-                                            <Binding/>
-                                        </MultiBinding>
-                                    </Ellipse.Visibility>
-                                </Ellipse>
-                            </Grid>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </StackPanel>
-
-            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="10,0,4,6"
-                        Visibility="{Binding ActiveTool, Converter={StaticResource EnumToVis}, ConverterParameter=Eraser}">
-                <TextBlock Text="橡皮擦" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#FF2D6CDF"/>
-                <ItemsControl ItemsSource="{Binding EraserWidths}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Grid Width="28" Height="28" Margin="2,0" Background="Transparent" Cursor="Hand"
-                                  MouseLeftButtonUp="OnEraserWidthClick" ToolTip="{Binding}">
-                                <Ellipse Fill="#FF666666" Stroke="#FFCCCCCC" StrokeThickness="1"
-                                         Width="{Binding Converter={StaticResource WidthToDot}, ConverterParameter=eraser}"
-                                         Height="{Binding Converter={StaticResource WidthToDot}, ConverterParameter=eraser}"/>
-                                <Ellipse Stroke="#FF2D6CDF" StrokeThickness="2" Margin="2">
-                                    <Ellipse.Visibility>
-                                        <MultiBinding Converter="{StaticResource EqualityToVis}">
-                                            <Binding Path="DataContext.EraserWidth" RelativeSource="{RelativeSource AncestorType=Window}"/>
-                                            <Binding/>
-                                        </MultiBinding>
-                                    </Ellipse.Visibility>
-                                </Ellipse>
-                            </Grid>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
             </StackPanel>
         </Grid>
 

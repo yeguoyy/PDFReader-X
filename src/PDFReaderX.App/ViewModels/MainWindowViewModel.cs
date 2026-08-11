@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
@@ -82,12 +82,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     public IReadOnlyList<Color> PenColors { get; } = new[]
     {
-        Colors.Black, Colors.Red, Colors.Blue, Colors.Green, Colors.Orange, Colors.Purple,
+        Colors.Black, Colors.Red, Colors.Orange, Colors.Yellow,
+        Colors.Green, Colors.Lime, Colors.Cyan, Colors.Blue,
+        Colors.Purple, Colors.Magenta, Colors.Pink, Colors.Brown,
+        Colors.Gray, Colors.DarkSlateGray, Colors.White,
     };
 
     public IReadOnlyList<Color> HighlightColors { get; } = new[]
     {
-        Colors.Yellow, Colors.Lime, Colors.Cyan, Colors.Magenta, Colors.Orange,
+        Colors.Yellow, Colors.Orange, Colors.Lime, Colors.Green,
+        Colors.Cyan, Colors.Blue, Colors.Magenta, Colors.Pink,
     };
 
     public IReadOnlyList<TextBorderStyleOption> TextBorderStyles { get; } = new[]
@@ -138,9 +142,130 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         AppSettingsStore.Save(settings);
     }
 
-    public IReadOnlyList<double> PenWidths { get; } = new[] { 1.5, 3.0, 5.0 };
-    public IReadOnlyList<double> HighlightWidths { get; } = new[] { 16.0, 24.0, 32.0 };
-    public IReadOnlyList<double> EraserWidths { get; } = new[] { 8.0, 16.0, 32.0 };
+    /// <summary>工具栏快捷笔：点击直接切换工具+颜色+粗细（可增删并持久化）。</summary>
+    public ObservableCollection<QuickPenStyle> QuickPens { get; } = LoadQuickPens();
+
+    private static ObservableCollection<QuickPenStyle> LoadQuickPens()
+    {
+        var saved = AppSettingsStore.Load().QuickPens;
+        if (saved.Count == 0)
+        {
+            return new ObservableCollection<QuickPenStyle>(DefaultQuickPens());
+        }
+        var list = new ObservableCollection<QuickPenStyle>();
+        foreach (var data in saved)
+        {
+            if (TryParseColorHex(data.Color, out var color)
+                && Enum.TryParse<InkTool>(data.Tool, out var tool))
+            {
+                list.Add(new QuickPenStyle
+                {
+                    Key = data.Key,
+                    Tool = tool,
+                    Kind = string.IsNullOrEmpty(data.Kind) ? "pen" : data.Kind,
+                    Color = color,
+                    Width = data.Width,
+                    Name = data.Name,
+                });
+            }
+        }
+        return list.Count > 0 ? list : new ObservableCollection<QuickPenStyle>(DefaultQuickPens());
+    }
+
+    private static IEnumerable<QuickPenStyle> DefaultQuickPens() => new[]
+    {
+        new QuickPenStyle { Key = "pen-black", Tool = InkTool.Pen, Kind = "pen", Color = Colors.Black, Width = 2.5, Name = "黑色钢笔" },
+        new QuickPenStyle { Key = "pen-red", Tool = InkTool.Pen, Kind = "pen", Color = Colors.Red, Width = 2.5, Name = "红色钢笔" },
+        new QuickPenStyle { Key = "pen-blue", Tool = InkTool.Pen, Kind = "pen", Color = Colors.Blue, Width = 2.5, Name = "蓝色钢笔" },
+        new QuickPenStyle { Key = "pen-green", Tool = InkTool.Pen, Kind = "pen", Color = Colors.Green, Width = 2.5, Name = "绿色钢笔" },
+        new QuickPenStyle { Key = "hl-yellow", Tool = InkTool.Highlighter, Kind = "highlighter", Color = Colors.Yellow, Width = 24, Name = "荧光黄" },
+        new QuickPenStyle { Key = "hl-cyan", Tool = InkTool.Highlighter, Kind = "highlighter", Color = Colors.Cyan, Width = 24, Name = "荧光蓝" },
+        new QuickPenStyle { Key = "hl-magenta", Tool = InkTool.Highlighter, Kind = "highlighter", Color = Colors.Magenta, Width = 24, Name = "荧光紫" },
+        new QuickPenStyle { Key = "hl-lime", Tool = InkTool.Highlighter, Kind = "highlighter", Color = Colors.Lime, Width = 24, Name = "荧光绿" },
+    };
+
+    /// <summary>新增快捷笔并保存。</summary>
+    public void AddQuickPen(QuickPenStyle style)
+    {
+        QuickPens.Add(style);
+        SaveQuickPens();
+    }
+
+    /// <summary>删除快捷笔并保存。</summary>
+    public void RemoveQuickPen(QuickPenStyle style)
+    {
+        QuickPens.Remove(style);
+        SaveQuickPens();
+    }
+
+    public void SaveQuickPens()
+    {
+        var settings = AppSettingsStore.Load();
+        settings.QuickPens = QuickPens.Select(style => new QuickPenData
+        {
+            Key = style.Key,
+            Tool = style.Tool.ToString(),
+            Kind = style.Kind,
+            Color = $"#{style.Color.R:X2}{style.Color.G:X2}{style.Color.B:X2}",
+            Width = style.Width,
+            Name = style.Name,
+        }).ToList();
+        AppSettingsStore.Save(settings);
+    }
+    public IReadOnlyList<double> PenWidths { get; } = new[] { 1.0, 1.5, 2.5, 3.0, 4.5, 6.0 };
+    public IReadOnlyList<double> HighlightWidths { get; } = new[] { 12.0, 16.0, 20.0, 24.0, 32.0, 40.0 };
+    public IReadOnlyList<double> EraserWidths { get; } = new[] { 6.0, 10.0, 16.0, 24.0, 36.0, 48.0 };
+
+    /// <summary>最近使用的颜色（笔/荧光笔共用，最多 8 个，本地持久化）。</summary>
+    public ObservableCollection<Color> RecentColors { get; } = LoadRecentColors();
+
+    private static ObservableCollection<Color> LoadRecentColors()
+    {
+        var list = new ObservableCollection<Color>();
+        foreach (var hex in AppSettingsStore.Load().RecentColors)
+        {
+            if (TryParseColorHex(hex, out var color))
+            {
+                list.Add(color);
+            }
+        }
+        return list;
+    }
+
+    /// <summary>记录最近使用的颜色（去重置顶，最多保留 8 个）。</summary>
+    public void AddRecentColor(Color color)
+    {
+        var existing = RecentColors.FirstOrDefault(c => c == color);
+        if (existing != default)
+        {
+            RecentColors.Remove(existing);
+        }
+        RecentColors.Insert(0, color);
+        while (RecentColors.Count > 8)
+        {
+            RecentColors.RemoveAt(RecentColors.Count - 1);
+        }
+        var settings = AppSettingsStore.Load();
+        settings.RecentColors = RecentColors
+            .Select(c => $"#{c.R:X2}{c.G:X2}{c.B:X2}")
+            .ToList();
+        AppSettingsStore.Save(settings);
+    }
+
+    private static bool TryParseColorHex(string hex, out Color color)
+    {
+        color = default;
+        var text = hex.Trim().TrimStart('#');
+        if (text.Length != 6
+            || !byte.TryParse(text.Substring(0, 2), System.Globalization.NumberStyles.HexNumber, null, out var r)
+            || !byte.TryParse(text.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, null, out var g)
+            || !byte.TryParse(text.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, null, out var b))
+        {
+            return false;
+        }
+        color = Color.FromRgb(r, g, b);
+        return true;
+    }
 
     public RelayCommand OpenCommand { get; }
 

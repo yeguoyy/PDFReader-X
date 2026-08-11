@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
+using PDFReaderX.App.Controls;
 using PDFReaderX.App.Models;
 using PDFReaderX.App.Services;
 using PDFReaderX.App.ViewModels;
@@ -17,6 +18,13 @@ public partial class MainWindow : Window
 {
     private bool _thumbnailListHover;
     private bool _bookmarksDirty;
+
+    // 快捷笔长按拖动排序
+    private QuickPenStyle? _dragPenItem;
+    private Point _dragPenStart;
+    private bool _dragPenArmed;
+    private bool _dragPenMoved;
+    private DispatcherTimer? _penLongPressTimer;
 
     public MainWindow()
     {
@@ -221,53 +229,253 @@ public partial class MainWindow : Window
         _bookmarksDirty = false;
     }
 
-    private void OnPenColorSwatchClick(object sender, MouseButtonEventArgs e)
+    /// <summary>点击 "+"：打开新建笔对话框。</summary>
+    private void OnAddQuickPenClick(object sender, RoutedEventArgs e)
     {
-        if (DataContext is MainWindowViewModel viewModel
-            && sender is FrameworkElement element
-            && element.DataContext is Color color)
+        if (DataContext is not MainWindowViewModel viewModel)
         {
-            viewModel.PenColor = color;
+            return;
+        }
+        var dialog = new NewPenDialog(
+            viewModel.PenColors.ToList(),
+            viewModel.PenWidths.ToList(),
+            viewModel.HighlightWidths.ToList()) { Owner = this };
+        if (dialog.ShowDialog() == true && dialog.Result is { } style)
+        {
+            viewModel.AddQuickPen(style);
         }
     }
 
-    private void OnPenWidthClick(object sender, MouseButtonEventArgs e)
+    /// <summary>右键快捷笔 → 删除这支笔。</summary>
+    private void OnDeleteQuickPenClick(object sender, RoutedEventArgs e)
     {
-        if (DataContext is MainWindowViewModel viewModel
-            && sender is FrameworkElement element
-            && element.DataContext is double width)
+        if (sender is MenuItem item
+            && item.Parent is ContextMenu menu
+            && menu.PlacementTarget is Button { Tag: QuickPenStyle style }
+            && DataContext is MainWindowViewModel viewModel)
         {
-            viewModel.PenWidth = width;
+            viewModel.RemoveQuickPen(style);
         }
     }
 
-    private void OnHighlightColorSwatchClick(object sender, MouseButtonEventArgs e)
+    /// <summary>长按快捷笔：按住约 0.25 秒后进入拖动排序模式（未移动松手仍视为点击）。</summary>
+    private void OnQuickPenPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (DataContext is MainWindowViewModel viewModel
-            && sender is FrameworkElement element
-            && element.DataContext is Color color)
+        if (sender is not Button { Tag: QuickPenStyle style })
         {
-            viewModel.HighlightColor = color;
+            return;
+        }
+        _dragPenItem = style;
+        _dragPenStart = e.GetPosition(QuickPensPanel);
+        _dragPenArmed = false;
+        _dragPenMoved = false;
+        _penLongPressTimer?.Stop();
+        _penLongPressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _penLongPressTimer.Tick += (_, _) =>
+        {
+            _penLongPressTimer.Stop();
+            if (_dragPenItem is not null && Mouse.LeftButton == MouseButtonState.Pressed && sender is Button button)
+            {
+                _dragPenArmed = true;
+                button.CaptureMouse();
+                button.Opacity = 0.55;
+            }
+        };
+        _penLongPressTimer.Start();
+    }
+
+    private void OnQuickPenPreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_dragPenItem is null || DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+        if (_dragPenArmed)
+        {
+            var position = e.GetPosition(QuickPensPanel);
+            var currentIndex = viewModel.QuickPens.IndexOf(_dragPenItem);
+            var targetIndex = GetQuickPenTargetIndex(position);
+            if (targetIndex >= 0 && targetIndex != currentIndex)
+            {
+                viewModel.QuickPens.Move(currentIndex, targetIndex);
+                _dragPenMoved = true;
+            }
+            return;
+        }
+        // 长按计时结束前移动超过阈值 → 放弃长按（鼠标小抖动不影响）
+        if (_penLongPressTimer?.IsEnabled == true
+            && (e.GetPosition(QuickPensPanel) - _dragPenStart).Length > 8)
+        {
+            _penLongPressTimer.Stop();
         }
     }
 
-    private void OnHighlightWidthClick(object sender, MouseButtonEventArgs e)
+    private void OnQuickPenPreviewMouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (DataContext is MainWindowViewModel viewModel
-            && sender is FrameworkElement element
-            && element.DataContext is double width)
+        _penLongPressTimer?.Stop();
+        var button = sender as Button;
+        button?.ReleaseMouseCapture();
+        if (_dragPenItem is not null && DataContext is MainWindowViewModel viewModel)
         {
-            viewModel.HighlightWidth = width;
+            if (_dragPenArmed && _dragPenMoved)
+            {
+                // 长按并真的拖动了 → 只排序，不切换
+                viewModel.SaveQuickPens();
+                e.Handled = true;
+            }
+            else
+            {
+                // 普通点击（短按，或长按后未移动）→ 切换笔
+                var style = _dragPenItem;
+                viewModel.ActiveTool = style.Tool;
+                if (style.Tool == InkTool.Pen)
+                {
+                    viewModel.PenColor = style.Color;
+                    viewModel.PenWidth = style.Width;
+                }
+                else
+                {
+                    viewModel.HighlightColor = style.Color;
+                    viewModel.HighlightWidth = style.Width;
+                }
+            }
+        }
+        _dragPenArmed = false;
+        _dragPenMoved = false;
+        _dragPenItem = null;
+        if (button is not null)
+        {
+            button.Opacity = 1.0;
         }
     }
 
-    private void OnEraserWidthClick(object sender, MouseButtonEventArgs e)
+    /// <summary>根据鼠标 X 位置计算应插入的索引（按各容器中心点二分）。</summary>
+    private int GetQuickPenTargetIndex(Point position)
     {
-        if (DataContext is MainWindowViewModel viewModel
-            && sender is FrameworkElement element
-            && element.DataContext is double width)
+        var count = ((MainWindowViewModel)DataContext!).QuickPens.Count;
+        for (var i = 0; i < count; i++)
         {
-            viewModel.EraserWidth = width;
+            if (QuickPensPanel.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement container)
+            {
+                var bounds = container.TransformToAncestor(QuickPensPanel)
+                    .TransformBounds(new Rect(container.RenderSize));
+                if (position.X < bounds.Left + bounds.Width / 2)
+                {
+                    return i;
+                }
+            }
+        }
+        return count - 1;
+    }
+    /// <summary>点工具按钮右上角箭头：已展开则收起，未展开则展开（ToggleButton 自带切换）。</summary>
+    private void OnToolArrowClick(object sender, RoutedEventArgs e)
+    {
+        // 点击箭头同时切换工具，保证视觉一致
+        if (DataContext is MainWindowViewModel viewModel && sender is ToggleButton { Tag: string tool })
+        {
+            if (Enum.TryParse<InkTool>(tool, out var inkTool))
+            {
+                viewModel.ActiveTool = inkTool;
+            }
+        }
+    }
+
+    private void OnPenColorPicked(object? sender, ColorPickedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.PenColor = e.Color;
+            viewModel.AddRecentColor(e.Color);
+        }
+    }
+
+    private void OnPenWidthPicked(object? sender, EventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel && sender is InkToolOptionsPanel panel)
+        {
+            viewModel.PenWidth = panel.CurrentWidth;
+        }
+    }
+
+    private void OnHighlightColorPicked(object? sender, ColorPickedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.HighlightColor = e.Color;
+            viewModel.AddRecentColor(e.Color);
+        }
+    }
+
+    private void OnHighlightWidthPicked(object? sender, EventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel && sender is InkToolOptionsPanel panel)
+        {
+            viewModel.HighlightWidth = panel.CurrentWidth;
+        }
+    }
+
+    private void OnEraserWidthPicked(object? sender, EventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel && sender is InkToolOptionsPanel panel)
+        {
+            viewModel.EraserWidth = panel.CurrentWidth;
+        }
+    }
+
+    private void OnPenMoreColorsClicked(object? sender, EventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+        var dialog = new ColorPickerDialog(viewModel.PenColor) { Owner = this };
+        if (dialog.ShowDialog() == true)
+        {
+            viewModel.PenColor = dialog.SelectedColor;
+            viewModel.AddRecentColor(dialog.SelectedColor);
+        }
+    }
+
+    private void OnHighlightMoreColorsClicked(object? sender, EventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+        var dialog = new ColorPickerDialog(viewModel.HighlightColor) { Owner = this };
+        if (dialog.ShowDialog() == true)
+        {
+            viewModel.HighlightColor = dialog.SelectedColor;
+            viewModel.AddRecentColor(dialog.SelectedColor);
+        }
+    }
+
+    private void OnPenEyedropperClicked(object? sender, EventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            PickWithEyedropper(viewModel.PenColor, color => viewModel.PenColor = color);
+        }
+    }
+
+    private void OnHighlightEyedropperClicked(object? sender, EventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            PickWithEyedropper(viewModel.HighlightColor, color => viewModel.HighlightColor = color);
+        }
+    }
+
+    private void PickWithEyedropper(Color currentColor, Action<Color> apply)
+    {
+        var picker = new EyedropperWindow { Owner = this };
+        if (picker.ShowDialog() == true && picker.PickedColor is { } color)
+        {
+            apply(color);
+            if (DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.AddRecentColor(color);
+            }
         }
     }
 

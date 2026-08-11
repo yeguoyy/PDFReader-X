@@ -1,0 +1,188 @@
+﻿<UserControl x:Class="PDFReaderX.App.Controls.InkToolOptionsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:converters="clr-namespace:PDFReaderX.App.Converters"
+             xmlns:controls="clr-namespace:PDFReaderX.App.Controls">
+    <UserControl.Resources>
+        <converters:ColorToBrushConverter x:Key="ColorToBrush"/>
+        <converters:ColorToHexConverter x:Key="ColorHex"/>
+                <converters:EqualityToVisibilityConverter x:Key="EqualityToVis"/>
+
+        <!-- 面板小按钮（- / +） -->
+        <Style x:Key="PanelSmallButton" TargetType="Button">
+            <Setter Property="Background" Value="#FFF0F0F0"/>
+            <Setter Property="BorderBrush" Value="#FFC8C8C8"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="#FF333333"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="3">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#FFE3EEFC"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#FFC9DDF8"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 面板文字按钮（其他颜色 / 取色器） -->
+        <Style x:Key="PanelTextButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#FF2D6CDF"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#FFE8F0FE"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 钢笔色板：带当前颜色的笔形图标 -->
+        <DataTemplate x:Key="PenColorTemplate">
+            <Grid Width="38" Height="32" Margin="1" Background="Transparent" Cursor="Hand"
+                  MouseLeftButtonUp="OnColorItemClick" ToolTip="{Binding Converter={StaticResource ColorHex}}">
+                <Viewbox Width="30" Height="26" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Grid Width="26" Height="26">
+                        <Path Data="M 4 24 L 13 15 L 15 17 L 6 26 Z" Fill="#FF9A9A9A"/>
+                        <Path Data="M 13 15 L 22 6 L 15 17 Z" Fill="{Binding Converter={StaticResource ColorToBrush}}"/>
+                        <Path Data="M 13 15 L 17.5 10.5" Stroke="White" StrokeThickness="0.9" Opacity="0.75"/>
+                    </Grid>
+                </Viewbox>
+                <Ellipse Stroke="#FF2D6CDF" StrokeThickness="2" Margin="1">
+                    <Ellipse.Visibility>
+                        <MultiBinding Converter="{StaticResource EqualityToVis}">
+                            <Binding Path="CurrentColor" RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                            <Binding/>
+                        </MultiBinding>
+                    </Ellipse.Visibility>
+                </Ellipse>
+            </Grid>
+        </DataTemplate>
+
+        <!-- 荧光笔色板：半透明笔头图标 -->
+        <DataTemplate x:Key="MarkerColorTemplate">
+            <Grid Width="38" Height="32" Margin="1" Background="Transparent" Cursor="Hand"
+                  MouseLeftButtonUp="OnColorItemClick" ToolTip="{Binding Converter={StaticResource ColorHex}}">
+                <Viewbox Width="30" Height="26" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Grid Width="26" Height="26">
+                        <Path Data="M 2 22 L 10 14 L 15 19 L 7 27 Z" Fill="#FFB8C8E2"/>
+                        <Path Data="M 10 14 L 19 5 L 24 10 L 15 19 Z" Fill="{Binding Converter={StaticResource ColorToBrush}}" Opacity="0.55"/>
+                        <Path Data="M 10 14 L 15 19" Stroke="#FF7A8AA5" StrokeThickness="1"/>
+                    </Grid>
+                </Viewbox>
+                <Ellipse Stroke="#FF2D6CDF" StrokeThickness="2" Margin="1">
+                    <Ellipse.Visibility>
+                        <MultiBinding Converter="{StaticResource EqualityToVis}">
+                            <Binding Path="CurrentColor" RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                            <Binding/>
+                        </MultiBinding>
+                    </Ellipse.Visibility>
+                </Ellipse>
+            </Grid>
+        </DataTemplate>
+
+        <!-- 粗细圆点 -->
+        <DataTemplate DataType="{x:Type controls:WidthPresetItem}">
+            <Grid Width="26" Height="24" Margin="0" Background="Transparent" Cursor="Hand"
+                  MouseLeftButtonUp="OnWidthDotClick" ToolTip="{Binding Value, StringFormat={}{0:0.#} 像素}">
+                <Ellipse Width="{Binding DotSize}" Height="{Binding DotSize}"
+                         Fill="{Binding CurrentColor, RelativeSource={RelativeSource AncestorType=UserControl},
+                                 Converter={StaticResource ColorToBrush}}"
+                         Stroke="#FF8A8A8A" StrokeThickness="1"/>
+                <Ellipse Stroke="#FF2D6CDF" StrokeThickness="2" Margin="1">
+                    <Ellipse.Visibility>
+                        <MultiBinding Converter="{StaticResource EqualityToVis}">
+                            <Binding Path="CurrentWidth" RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                            <Binding Path="Value"/>
+                        </MultiBinding>
+                    </Ellipse.Visibility>
+                </Ellipse>
+            </Grid>
+        </DataTemplate>
+
+        <!-- 最近使用的颜色色块 -->
+        <DataTemplate x:Key="RecentColorTemplate">
+            <Border Width="22" Height="22" Margin="2" Background="{Binding Converter={StaticResource ColorToBrush}}"
+                    BorderBrush="#FFC8C8C8" BorderThickness="1" CornerRadius="3" Cursor="Hand"
+                    MouseLeftButtonUp="OnRecentItemClick" ToolTip="{Binding Converter={StaticResource ColorHex}}"/>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Border Background="White" BorderBrush="#FFD5D5D5" BorderThickness="1" CornerRadius="4"
+            Padding="10,8,10,10" SnapsToDevicePixels="True">
+        <StackPanel Width="252">
+
+            <!-- 当前笔触预览 -->
+            <Border Height="30" Background="#FFF4F4F4" CornerRadius="3">
+                <Border x:Name="PreviewBar" Width="140" HorizontalAlignment="Center" CornerRadius="2"
+                        VerticalAlignment="Center"/>
+            </Border>
+
+            <!-- 粗细 -->
+            <TextBlock Text="粗细" FontWeight="SemiBold" FontSize="12" Foreground="#FF333333" Margin="0,8,0,0"/>
+            <DockPanel Margin="0,2,0,0">
+                <Button DockPanel.Dock="Left" Content="−" Width="24" Height="24" Margin="0,0,4,0"
+                        Style="{StaticResource PanelSmallButton}" Click="OnWidthMinusClick" ToolTip="减小粗细"/>
+                <Button DockPanel.Dock="Right" Content="+" Width="24" Height="24" Margin="4,0,0,0"
+                        Style="{StaticResource PanelSmallButton}" Click="OnWidthPlusClick" ToolTip="增大粗细"/>
+                <ItemsControl x:Name="WidthDots" HorizontalAlignment="Center">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </DockPanel>
+
+            <!-- 最近使用的颜色 -->
+            <StackPanel x:Name="RecentSection" Margin="0,10,0,0">
+                <TextBlock Text="最近使用的颜色" FontWeight="SemiBold" FontSize="12" Foreground="#FF333333"/>
+                <ItemsControl x:Name="RecentList" Margin="0,4,0,0" ItemTemplate="{StaticResource RecentColorTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </StackPanel>
+
+            <!-- 颜色 -->
+            <StackPanel x:Name="ColorSection" Margin="0,10,0,0">
+                <TextBlock Text="颜色" FontWeight="SemiBold" FontSize="12" Foreground="#FF333333"/>
+                <ItemsControl x:Name="ColorGrid" Margin="0,4,0,0" ItemsSource="{Binding ColorOptions, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </StackPanel>
+
+            <!-- 其他颜色 / 取色器 -->
+            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                <Button Content="其他颜色…" Style="{StaticResource PanelTextButton}" Click="OnMoreColorsClick"
+                        ToolTip="打开自定义颜色对话框"/>
+                <Button Content="取色器" Style="{StaticResource PanelTextButton}" Click="OnEyedropperClick"
+                        ToolTip="从屏幕任意位置取色"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</UserControl>
