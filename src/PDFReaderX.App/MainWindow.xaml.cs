@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        RestoreWindowBounds();
         _saveToastTimer.Tick += (_, _) =>
         {
             _saveToastTimer.Stop();
@@ -68,8 +69,41 @@ public partial class MainWindow : Window
 
     private bool _isExitingWithSave;
 
+    /// <summary>恢复上次关闭时的窗口大小（限制在当前工作区内，避免小屏幕窗口过大），并恢复最大化状态。</summary>
+    private void RestoreWindowBounds()
+    {
+        var settings = AppSettingsStore.Load();
+        var work = SystemParameters.WorkArea;
+        var width = Math.Max(640, Math.Min(settings.WindowWidth ?? 1280.0, work.Width));
+        var height = Math.Max(480, Math.Min(settings.WindowHeight ?? 800.0, work.Height));
+        Width = width;
+        Height = height;
+        if (settings.WindowMaximized)
+        {
+            WindowState = WindowState.Maximized;
+        }
+    }
+
+    /// <summary>保存当前窗口大小与最大化状态（最大化时记录还原尺寸）。</summary>
+    private void SaveWindowBounds()
+    {
+        var settings = AppSettingsStore.Load();
+        var bounds = WindowState == WindowState.Normal
+            ? new Rect(Left, Top, Width, Height)
+            : RestoreBounds;
+        if (bounds.Width > 0 && bounds.Height > 0)
+        {
+            settings.WindowWidth = bounds.Width;
+            settings.WindowHeight = bounds.Height;
+        }
+        settings.WindowMaximized = WindowState == WindowState.Maximized;
+        AppSettingsStore.Save(settings);
+    }
+
     private void OnWindowClosing(object? sender, CancelEventArgs e)
     {
+        SaveWindowBounds(); // 记住关闭时的窗口大小/最大化状态，下次启动恢复
+
         if (DataContext is not MainWindowViewModel viewModel || viewModel.Document is null)
         {
             return;

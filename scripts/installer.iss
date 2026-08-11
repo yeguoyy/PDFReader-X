@@ -23,7 +23,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 WizardStyle=modern
 
 [Files]
-Source: "..\dist\win-x64\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\win-x64\{#MyAppVersion}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务:"
@@ -31,6 +31,14 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+
+[Registry]
+; .pdfrx 文件关联（HKCU，卸载时自动清理）
+Root: HKCU; Subkey: "Software\Classes\.pdfrx"; ValueType: string; ValueName: ""; ValueData: "PDFReaderX.Pdfrx"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.pdfrx\OpenWithProgids"; ValueType: none; ValueName: "PDFReaderX.Pdfrx"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\PDFReaderX.Pdfrx"; ValueType: string; ValueName: ""; ValueData: "PDFReader X 批注文档"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\PDFReaderX.Pdfrx\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\PDFReaderX.Pdfrx\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Flags: uninsdeletekey
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent

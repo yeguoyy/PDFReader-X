@@ -25,7 +25,7 @@ public partial class InfiniteCanvas : UserControl
     public const double MinZoom = 0.25;
     public const double MaxZoom = 4.0;
     private const double MaxRenderDpi = 240;
-    private const int MaxCachedPages = 6;
+    private int MaxCachedPages => PerformanceMode ? 3 : 6; // 性能模式减少缓存页数，降低内存占用
     private const double WheelScrollStep = 40;
 
     public static readonly DependencyProperty DocumentProperty = DependencyProperty.Register(
@@ -76,6 +76,10 @@ public partial class InfiniteCanvas : UserControl
     public static readonly DependencyProperty TextFontSizeProperty = DependencyProperty.Register(
         nameof(TextFontSize), typeof(double), typeof(InfiniteCanvas),
         new PropertyMetadata(14.0, OnTextFontSizeChanged));
+
+    public static readonly DependencyProperty PerformanceModeProperty = DependencyProperty.Register(
+        nameof(PerformanceMode), typeof(bool), typeof(InfiniteCanvas),
+        new PropertyMetadata(false, OnPerformanceModeChanged));
 
     public static readonly DependencyProperty CurrentPageIndexProperty = DependencyProperty.Register(
         nameof(CurrentPageIndex), typeof(int), typeof(InfiniteCanvas),
@@ -182,6 +186,21 @@ public partial class InfiniteCanvas : UserControl
     {
         get => (double)GetValue(TextFontSizeProperty);
         set => SetValue(TextFontSizeProperty, value);
+    }
+
+    /// <summary>性能模式：降低渲染清晰度上限与缓存页数（滚动缩放更流畅）。</summary>
+    public bool PerformanceMode
+    {
+        get => (bool)GetValue(PerformanceModeProperty);
+        set => SetValue(PerformanceModeProperty, value);
+    }
+
+    private static void OnPerformanceModeChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var canvas = (InfiniteCanvas)d;
+        canvas.ClearPageBitmapCache(); // 旧分辨率位图全部作废，按新模式重新渲染
+        canvas.LayoutPages();
+        canvas.ScheduleRerender();
     }
 
     private static void OnTextFontSizeChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -663,6 +682,22 @@ public partial class InfiniteCanvas : UserControl
         }
     }
 
+    /// <summary>清空页面位图缓存并释放视觉引用（渲染分辨率等参数变化时调用）。</summary>
+    private void ClearPageBitmapCache()
+    {
+        foreach (var image in _imagesByPage.Values)
+        {
+            if (image.Fill is ImageBrush brush)
+            {
+                brush.ImageSource = null;
+            }
+        }
+        _bitmapCache.Clear();
+        _cacheOrder.Clear();
+        _pendingRenders.Clear();
+        _documentEpoch++; // 使进行中的渲染任务结果作废
+    }
+
     private void RenderPageAsync(PageViewModel page)
     {
         if (Document is null || _pendingRenders.Contains(page.PageIndex))
@@ -671,7 +706,7 @@ public partial class InfiniteCanvas : UserControl
         }
 
         var index = page.PageIndex;
-        var dpi = Math.Min(96.0 * Zoom, MaxRenderDpi);
+        var dpi = Math.Min(96.0 * Zoom, PerformanceMode ? 144.0 : MaxRenderDpi); // 性能模式降低渲染分辨率上限
         var epoch = _documentEpoch;
         var document = Document; // 在 UI 线程捕获，后台线程不能访问依赖属性
         _pendingRenders.Add(index);

@@ -127,6 +127,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private double _textFontSize = 14.0;
 
+    /// <summary>性能模式（低配电脑）：渲染上限与缓存页数降低，滚动缩放更流畅。</summary>
+    [ObservableProperty]
+    private bool _performanceMode = AppSettingsStore.Load().PerformanceMode;
+
+    partial void OnPerformanceModeChanged(bool value)
+    {
+        var settings = AppSettingsStore.Load();
+        settings.PerformanceMode = value;
+        AppSettingsStore.Save(settings);
+    }
+
     public IReadOnlyList<double> PenWidths { get; } = new[] { 1.5, 3.0, 5.0 };
     public IReadOnlyList<double> HighlightWidths { get; } = new[] { 16.0, 24.0, 32.0 };
     public IReadOnlyList<double> EraserWidths { get; } = new[] { 8.0, 16.0, 32.0 };
@@ -787,15 +798,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             PdfRenderService document;
             if (package.PdfBytes.Length > 0)
             {
-                document = await Task.Run(() => PdfRenderService.Load(package.PdfBytes, Path.GetFileName(filePath)));
+                document = await Task.Run(() => PdfRenderService.Load(
+                    package.PdfBytes, Path.GetFileName(filePath), package.PdfSource));
             }
-            else if (package.PdfSource is { } sourcePath && File.Exists(sourcePath))
+            else if (package.PdfSource is { } sourcePath && TryResolveSourcePdf(filePath, sourcePath, out var resolvedPath))
             {
-                document = await Task.Run(() => PdfRenderService.Load(sourcePath));
+                document = await Task.Run(() => PdfRenderService.Load(resolvedPath));
+            }
+            else if (AskUserForSourcePdf(package.PdfSource, out var chosenPath))
+            {
+                document = await Task.Run(() => PdfRenderService.Load(chosenPath!));
             }
             else
             {
-                throw new InvalidDataException("批注包内未包含 PDF 且无法定位源 PDF 文件");
+                throw new InvalidDataException("已取消打开：批注包未内嵌 PDF，且未选择源 PDF 文件");
             }
             await LoadAsync(document, package.Bookmarks);
             CurrentPdfrxPath = filePath;
@@ -810,6 +826,41 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
+    }
+
+    /// <summary>解析包内记录的源 PDF 路径：相对路径按包所在目录解析，并校验是存在的 .pdf 文件。</summary>
+    private static bool TryResolveSourcePdf(string packagePath, string sourcePath, out string resolvedPath)
+    {
+        var candidate = Path.IsPathRooted(sourcePath)
+            ? sourcePath
+            : Path.Combine(Path.GetDirectoryName(packagePath) ?? string.Empty, sourcePath);
+        resolvedPath = candidate;
+        return File.Exists(candidate)
+            && Path.GetExtension(candidate).Equals(".pdf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>引用式批注包找不到源 PDF 时，提示并让用户手动选择；返回 false 表示用户取消。</summary>
+    private bool AskUserForSourcePdf(string? originalPath, out string? chosenPath)
+    {
+        chosenPath = null;
+        var message = originalPath is null
+            ? "该批注文档未包含 PDF 内容，也没有记录源 PDF 路径。\n请选择对应的 PDF 文件继续打开。"
+            : $"该批注文档未内嵌 PDF，记录的源文件不存在：\n{originalPath}\n\n请选择对应的 PDF 文件继续打开（把源 PDF 放回原位置可免去选择）。";
+        if (MessageBox.Show(message, "选择源 PDF", MessageBoxButton.OKCancel, MessageBoxImage.Information) != MessageBoxResult.OK)
+        {
+            return false;
+        }
+        var dialog = new OpenFileDialog
+        {
+            Title = "选择批注文档对应的 PDF 文件",
+            Filter = "PDF 文件 (*.pdf)|*.pdf|所有文件 (*.*)|*.*",
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return false;
+        }
+        chosenPath = dialog.FileName;
+        return true;
     }
 
     private async Task LoadAsync(PdfRenderService document, IReadOnlyList<BookmarkData>? embeddedBookmarks = null)

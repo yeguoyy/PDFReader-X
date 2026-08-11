@@ -13,15 +13,19 @@ public sealed class PdfRenderService : IDisposable
     private readonly PdfDocument _document;
     private readonly object _renderLock = new();
 
-    private PdfRenderService(PdfDocument document, string filePath, byte[]? sourceBytes = null, Stream? sourceStream = null)
+    private PdfRenderService(PdfDocument document, string filePath, byte[]? sourceBytes = null, Stream? sourceStream = null, string? sourcePdfPath = null)
     {
         _document = document;
         FilePath = filePath;
         _sourceBytes = sourceBytes;
         _sourceStream = sourceStream;
+        SourcePdfPath = sourcePdfPath;
     }
 
     public string FilePath { get; }
+
+    /// <summary>真实源 PDF 路径（供引用式 .pdfrx 保存使用）；从内嵌包打开时取包内记录的路径，不可用时为 null。</summary>
+    public string? SourcePdfPath { get; }
 
     private readonly byte[]? _sourceBytes;
     private readonly Stream? _sourceStream; // 从字节加载时保留内存流，PdfiumViewer 可能持有它
@@ -31,16 +35,16 @@ public sealed class PdfRenderService : IDisposable
     public static PdfRenderService Load(string filePath)
     {
         ArgumentNullException.ThrowIfNull(filePath);
-        return new PdfRenderService(PdfDocument.Load(filePath), filePath);
+        return new PdfRenderService(PdfDocument.Load(filePath), filePath, sourcePdfPath: filePath);
     }
 
-    /// <summary>从内存字节加载 PDF（打开 .pdfrx 包内嵌 PDF 使用），FilePath 仅作显示名。</summary>
-    public static PdfRenderService Load(byte[] data, string displayPath)
+    /// <summary>从内存字节加载 PDF（打开 .pdfrx 包内嵌 PDF 使用），FilePath 仅作显示名，sourcePdfPath 为真实源 PDF 路径（供后续引用式保存）。</summary>
+    public static PdfRenderService Load(byte[] data, string displayPath, string? sourcePdfPath = null)
     {
         ArgumentNullException.ThrowIfNull(data);
         var stream = new MemoryStream(data);
         var document = PdfDocument.Load(stream);
-        return new PdfRenderService(document, displayPath, data, stream);
+        return new PdfRenderService(document, displayPath, data, stream, sourcePdfPath);
     }
 
     /// <summary>原始 PDF 字节：内存加载的直接返回，文件加载的读取文件（保存 .pdfrx 时嵌入用）。</summary>

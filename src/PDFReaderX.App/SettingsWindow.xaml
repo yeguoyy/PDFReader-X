@@ -101,6 +101,13 @@
                                   ToolTip="选择后立即生效，作用于之后新建的文本框"/>
                     </StackPanel>
                     <Separator Margin="0,12"/>
+                    <TextBlock Text="性能" FontWeight="Bold" FontSize="14"/>
+                    <CheckBox Content="性能模式（适合配置较低的电脑）" Margin="0,6,0,0"
+                              IsChecked="{Binding PerformanceMode}"
+                              ToolTip="开启后降低页面渲染清晰度上限与缓存页数，滚动、缩放更流畅"/>
+                    <TextBlock Text="降低页面渲染清晰度上限与缓存页数，滚动、缩放更流畅；放大后文字会略模糊。切换后立即生效。"
+                               Foreground="Gray" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    <Separator Margin="0,12"/>
                     <TextBlock Text="数据与存储" FontWeight="Bold" FontSize="14"/>
                     <TextBlock Text="LLM 设置保存在 %AppData%\PDFReaderX\llm-settings.json，不会进入项目仓库。"
                                Foreground="Gray" TextWrapping="Wrap" Margin="0,6,0,0"/>

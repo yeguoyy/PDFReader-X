@@ -44,7 +44,13 @@ public static class PdfrxStore
         var zoom = canvas.Zoom;
         var panX = canvas.PanX;
         var panY = canvas.PanY;
-        var sourcePath = document.FilePath;
+        // 真实源 PDF 路径：文件打开的用文件路径，内嵌包打开的用包内记录（若仍不可用则回退内嵌，避免生成打不开的引用式包）
+        var sourcePath = document.SourcePdfPath ?? document.FilePath;
+        if (!File.Exists(sourcePath)
+            || !Path.GetExtension(sourcePath).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            embedPdf = true;
+        }
         var pdfBytes = embedPdf ? await Task.Run(() => document.GetSourceBytes()) : null;
         await Task.Run(() => WriteArchive(
             path, sourcePath, embedPdf, zoom, panX, panY,
@@ -116,7 +122,8 @@ public static class PdfrxStore
 
                 if (embedPdf && pdfBytes is not null)
                 {
-                    WriteBytes(archive, "pdf/original.pdf", pdfBytes);
+                    // PDF 内部已压缩，不再二次压缩：体积几乎不变，保存大文件时避免长时间卡顿
+                    WriteBytes(archive, "pdf/original.pdf", pdfBytes, CompressionLevel.NoCompression);
                 }
             }
 
@@ -244,9 +251,9 @@ public static class PdfrxStore
         writer.Write(JsonSerializer.Serialize(value, JsonOptions));
     }
 
-    private static void WriteBytes(ZipArchive archive, string entryName, byte[] bytes)
+    private static void WriteBytes(ZipArchive archive, string entryName, byte[] bytes, CompressionLevel level = CompressionLevel.Optimal)
     {
-        var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
+        var entry = archive.CreateEntry(entryName, level);
         using var stream = entry.Open();
         stream.Write(bytes, 0, bytes.Length);
     }

@@ -506,7 +506,8 @@
                                              HighlightWidth="{Binding HighlightWidth}"
                                              EraserWidth="{Binding EraserWidth}"
                                              TextBorderStyle="{Binding TextBorderStyle}"
-                                             TextFontSize="{Binding TextFontSize}"/>
+                                             TextFontSize="{Binding TextFontSize}"
+                                             PerformanceMode="{Binding PerformanceMode}"/>
                     <TextBlock Text="打开一个 PDF 文件开始"
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                FontSize="20" Foreground="#FF909090">
