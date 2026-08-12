@@ -1,4 +1,4 @@
-using System.Net.Http.Headers;
+﻿using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 
@@ -687,7 +687,7 @@ public sealed class OpenAiCompatibleService
             return result;
         }
 
-        var chapters = topLevelBookmarks.Take(4).ToList();
+        var chapters = topLevelBookmarks.Take(6).ToList();
         var contentItems = new List<object>(pageImages.Count + 1);
         foreach (var image in pageImages)
         {
@@ -768,6 +768,107 @@ public sealed class OpenAiCompatibleService
         return result;
     }
 
+    /// <summary>
+    /// 识别每张页面图片页眉/页脚印刷的书本页码（阿拉伯数字），
+    /// 返回 (PDF 页, 书本页码)，用于精确确认正文页码偏移。
+    /// </summary>
+    public async Task<List<(int PdfPage, int BookPage)>> LocatePageNumbersAsync(
+        IReadOnlyList<byte[]> pageImages,
+        int firstPageNumber,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new List<(int PdfPage, int BookPage)>();
+        if (pageImages.Count == 0)
+        {
+            return result;
+        }
+
+        var contentItems = new List<object>(pageImages.Count + 1);
+        foreach (var image in pageImages)
+        {
+            contentItems.Add(new
+            {
+                type = "image_url",
+                image_url = new { url = "data:image/png;base64," + Convert.ToBase64String(image) },
+            });
+        }
+        contentItems.Add(new { type = "text", text = BuildPageNumberPrompt(firstPageNumber, pageImages.Count) });
+
+        var payload = new
+        {
+            model = _settings.VisionModel,
+            enable_thinking = false,
+            max_tokens = 2048,
+            response_format = new { type = "json_object" },
+            messages = new object[]
+            {
+                new { role = "system", content = "你是 PDF 页码识别助手，只输出 JSON，不要输出任何其他文字。" },
+                new { role = "user", content = contentItems },
+            },
+        };
+
+        var url = _settings.Endpoint.TrimEnd('/') + "/chat/completions";
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"),
+        };
+        using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"LLM 接口返回 {(int)response.StatusCode}：{Truncate(body, 300)}");
+        }
+
+        using var json = JsonDocument.Parse(body);
+        if (!json.RootElement.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
+        {
+            throw new InvalidOperationException("LLM 返回中没有 choices 字段");
+        }
+        var contentText = choices[0]
+            .GetProperty("message")
+            .GetProperty("content")
+            .GetString();
+        if (string.IsNullOrWhiteSpace(contentText))
+        {
+            throw new InvalidOperationException("LLM 返回内容为空");
+        }
+
+        var document = ExtractJson(contentText);
+        using var root = JsonDocument.Parse(document);
+        if (!root.RootElement.TryGetProperty("pages", out var pages) || pages.ValueKind != JsonValueKind.Array)
+        {
+            return result;
+        }
+        foreach (var item in pages.EnumerateArray())
+        {
+            if (item.TryGetProperty("image", out var imageElement)
+                && imageElement.TryGetInt32(out var image)
+                && image > 0
+                && item.TryGetProperty("number", out var numberElement)
+                && numberElement.TryGetInt32(out var number)
+                && number > 0)
+            {
+                result.Add((firstPageNumber + image - 1, number));
+            }
+        }
+        return result;
+    }
+
+    /// <summary>构造页眉/页脚页码识别提示。</summary>
+    private static string BuildPageNumberPrompt(int firstPageNumber, int pageCount)
+    {
+        return
+            "用户提供了 PDF 中连续若干页的页面图片（按顺序，共 " + pageCount + " 张，第 1 张 = PDF 第 " + firstPageNumber + " 页）。\n" +
+            "请识别每页顶部页眉或底部页脚印刷的书本页码（通常位于页面外侧角落或居中，字号较小、单独出现）。\n" +
+            "规则：\n" +
+            "1. 只输出阿拉伯数字页码；罗马数字（如 i、xii）或该页没有页码时输出 -1。\n" +
+            "2. 页眉里的章节名、书名，页脚装饰、网址等都不算页码。\n" +
+            "3. 每张图片输出一个结果，按图片序号对应。\n" +
+            "只输出 JSON，不要输出任何其他文字：\n" +
+            "{\"pages\":[{\"image\":1,\"number\":2},{\"image\":2,\"number\":3},{\"image\":3,\"number\":-1}]}";
+    }
+
     /// <summary>构造视觉目录识别提示（含 tocComplete 判断）。</summary>
     private static string BuildVisionTocPrompt(int pageCount, int firstPageNumber)
     {
@@ -777,7 +878,7 @@ public sealed class OpenAiCompatibleService
         return
             "你是 PDF 目录识别助手。用户提供 PDF 中连续若干页的页面图片（按顺序，共 " + pageCount + " 张，对应 PDF 第 " + pageLabel + " 页）。\n" +
             "1. 判断这些页里是否包含目录页（出现\"目录\"、\"目 录\"、\"Contents\"、\"Table of Contents\"等字样）。\n" +
-            "2. 有目录：提取目前能看到的所有目录条目，保留层级（子条目放 children），页码为目录中标注的书本页码（从 1 开始的正整数）。同时判断目录是否已经完整读完：\n" +
+            "2. 有目录：提取目前能看到的所有目录条目，保留层级（子条目放 children）。页码为目录中标注的书本页码：阿拉伯数字直接输出为数字（如 1、23）；罗马数字（如 i、xii）必须输出为字符串（如 \"page\":\"xii\"），不要换算成阿拉伯数字。目录中没有标注页码的条目（如无点线引导的条目标题）不要输出。同时判断目录是否已经完整读完：\n" +
             "   - 如果最后一页底部仍在继续列出目录条目、明显还有后续目录页，tocComplete=false；\n" +
             "   - 如果最后一页的目录已经结束（之后是正文、空白，或用户提示已经是最后几页），tocComplete=true。\n" +
             "3. 没有目录：输出 {\"hasToc\":false}\n" +
@@ -800,7 +901,7 @@ public sealed class OpenAiCompatibleService
         sb.Append("这些图片按顺序编号：第 1 张 = PDF 第 ").Append(firstPageNumber)
             .Append(" 页，第 ").Append(pageCount).Append(" 张 = PDF 第 ")
             .Append(firstPageNumber + pageCount - 1).Append(" 页。\n");
-        sb.Append("请在图片中查找以下章节标题（作为页首大标题出现）：\n");
+        sb.Append("请在图片中查找以下章节标题（出现在章节起始页，特征：加粗、字号明显大于正文、独占一行、位置靠上，区别于正文小标题和页眉章节名）：\n");
         var index = 1;
         foreach (var chapter in chapters)
         {
@@ -983,14 +1084,32 @@ public sealed class OpenAiCompatibleService
             }
 
             var page = 0;
-            if (item.TryGetProperty("page", out var pageElement)
-                && pageElement.ValueKind == JsonValueKind.Number
-                && pageElement.TryGetInt32(out var rawPage))
+            if (item.TryGetProperty("page", out var pageElement))
             {
-                page = rawPage;
+                if (pageElement.ValueKind == JsonValueKind.Number
+                    && pageElement.TryGetInt32(out var rawPage))
+                {
+                    page = rawPage;
+                }
+                else if (pageElement.ValueKind == JsonValueKind.String)
+                {
+                    var rawPageText = pageElement.GetString()?.Trim();
+                    if (int.TryParse(rawPageText, out var parsedPage))
+                    {
+                        page = parsedPage;
+                    }
+                    else
+                    {
+                        page = RomanToInt(rawPageText);
+                    }
+                }
+            }
+            if (page <= 0)
+            {
+                continue; // 目录中未标明页码的条目不写入书签
             }
 
-            var node = new LlmBookmark(title, Math.Max(0, page));
+            var node = new LlmBookmark(title, page);
             if (item.TryGetProperty("children", out var children)
                 && children.ValueKind == JsonValueKind.Array)
             {
@@ -1002,6 +1121,45 @@ public sealed class OpenAiCompatibleService
             result.Add(node);
         }
         return result;
+    }
+
+    /// <summary>把罗马数字（i、xii 等）转为阿拉伯数字，无法解析时返回 0。</summary>
+    private static int RomanToInt(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return 0;
+        }
+        var roman = text.Trim().ToUpperInvariant();
+        var values = new Dictionary<char, int>
+        {
+            ['I'] = 1,
+            ['V'] = 5,
+            ['X'] = 10,
+            ['L'] = 50,
+            ['C'] = 100,
+            ['D'] = 500,
+            ['M'] = 1000,
+        };
+        var total = 0;
+        var prev = 0;
+        for (var i = roman.Length - 1; i >= 0; i--)
+        {
+            if (!values.TryGetValue(roman[i], out var value))
+            {
+                return 0;
+            }
+            if (value < prev)
+            {
+                total -= value;
+            }
+            else
+            {
+                total += value;
+                prev = value;
+            }
+        }
+        return total;
     }
 
     /// <summary>提取文本中最外层 JSON 对象（容忍 LLM 输出前后解释文字或代码块围栏）。</summary>
@@ -1063,7 +1221,7 @@ public sealed class OpenAiCompatibleService
     private const string TocPrompt = """
 你是 PDF 目录识别助手。用户提供 PDF 前若干页的文本（按顺序）。
 1. 判断这些页里是否包含目录页（出现"目录"、"目 录"、"Contents"、"Table of Contents"等字样）。
-2. 有目录：提取目前能看到的所有目录条目，保留层级（子条目放 children），页码为目录中标注的书本页码（从 1 开始的正整数）。同时判断目录是否已经完整读完：
+2. 有目录：提取目前能看到的所有目录条目，保留层级（子条目放 children），页码为目录中标注的书本页码（从 1 开始的正整数）。目录中没有标注页码的条目（如"出版者的话"、无点线引导的条目标题）不要输出。同时判断目录是否已经完整读完：
    - 如果最后一页底部仍在继续列出目录条目、明显还有后续目录页，tocComplete=false；
    - 如果最后一页的目录已经结束（之后是正文、空白，或用户提示已经是最后几页），tocComplete=true。
 3. 没有目录：输出 {"hasToc":false}

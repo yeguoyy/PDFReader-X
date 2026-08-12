@@ -280,6 +280,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// <summary>侧边栏的 AI 生成书签按钮（有文档且当前没有书签时可用/显示）。</summary>
     public AsyncRelayCommand AutoGenerateBookmarksCommand { get; }
 
+    /// <summary>书签整体下移 1 页（所有书签目标页 +1）。</summary>
+    public RelayCommand ShiftBookmarksDownCommand { get; }
+
+    /// <summary>书签整体上移 1 页（所有书签目标页 -1）。</summary>
+    public RelayCommand ShiftBookmarksUpCommand { get; }
+
     /// <summary>当前是否有书签（PDF 自带或 AI 生成）。</summary>
     public bool HasBookmarks => Bookmarks.Count > 0;
 
@@ -321,12 +327,47 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         GenerateBookmarksCommand = new AsyncRelayCommand(GenerateBookmarksAsync, () => HasDocument && !IsBusy);
         AutoGenerateBookmarksCommand = new AsyncRelayCommand(
             GenerateBookmarksAsync, () => HasDocument && !IsBusy && !HasBookmarks);
+        ShiftBookmarksDownCommand = new RelayCommand(() => ShiftBookmarks(1), () => HasBookmarks);
+        ShiftBookmarksUpCommand = new RelayCommand(() => ShiftBookmarks(-1), () => HasBookmarks);
         Bookmarks.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(HasBookmarks));
             OnPropertyChanged(nameof(ShowAutoBookmarkButton));
             AutoGenerateBookmarksCommand.NotifyCanExecuteChanged();
+            ShiftBookmarksDownCommand.NotifyCanExecuteChanged();
+            ShiftBookmarksUpCommand.NotifyCanExecuteChanged();
         };
+    }
+
+    /// <summary>把所有书签的目标页整体平移 delta 页（±1），钳制到文档页范围。</summary>
+    private void ShiftBookmarks(int delta)
+    {
+        if (Document is null || Bookmarks.Count == 0)
+        {
+            return;
+        }
+        var pageCount = Document.PageCount;
+        var shifted = Bookmarks.Select(b => ShiftBookmarkNode(b, delta, pageCount)).ToList();
+        Bookmarks.Clear();
+        foreach (var node in shifted)
+        {
+            Bookmarks.Add(node);
+        }
+        StatusText = delta > 0
+            ? "书签已整体下移 1 页（保存后生效）"
+            : "书签已整体上移 1 页（保存后生效）";
+    }
+
+    private static BookmarkViewModel ShiftBookmarkNode(BookmarkViewModel node, int delta, int pageCount)
+    {
+        var shifted = new BookmarkViewModel(
+            node.Title,
+            node.PageIndex < 0 ? -1 : Math.Clamp(node.PageIndex + delta, 0, Math.Max(0, pageCount - 1)));
+        foreach (var child in node.Children)
+        {
+            shifted.Children.Add(ShiftBookmarkNode(child, delta, pageCount));
+        }
+        return shifted;
     }
 
     private void OpenLlmSettings()
@@ -589,15 +630,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var service = new OpenAiCompatibleService(settings);
 
         // 智能目录模式：先少量渲染找目录，读完目录后确认偏移推算书签
-        if (await TryGenerateBookmarksByVisionSmartAsync(service, document, pageCount))
+        var (ok, failReason) = await TryGenerateBookmarksByVisionSmartAsync(service, document, pageCount);
+        if (ok)
         {
             return;
         }
 
         StatusText = "未找到目录，已停止（避免全本读取）";
-        BookmarkGenerationStatus = "未找到目录或无法确认页码偏移";
+        BookmarkGenerationStatus = failReason ?? "未找到目录或无法确认页码偏移";
         MessageBox.Show(
-            "整本 PDF 中未找到目录页，或无法确认章节页码偏移，未生成书签。",
+            "未生成书签：" + (failReason ?? "整本 PDF 中未找到目录页，或无法确认章节页码偏移。"),
             "PDFReader X",
             MessageBoxButton.OK,
             MessageBoxImage.Information);
@@ -608,7 +650,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     /// 并定位前几个章节标题确认页码偏移，推算全本书签。
     /// 找不到目录或偏移无法确认时返回 false，不再回退全本视觉识别。
     /// </summary>
-    private async Task<bool> TryGenerateBookmarksByVisionSmartAsync(
+    private async Task<(bool Ok, string? FailReason)> TryGenerateBookmarksByVisionSmartAsync(
         OpenAiCompatibleService service,
         PdfRenderService document,
         int pageCount)
@@ -632,12 +674,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 }
                 if (isLastBatch)
                 {
-                    return false;
+                    return (false, "整本 PDF 中未找到目录页");
                 }
             }
             if (tocStart < 0)
             {
-                return false;
+                return (false, "整本 PDF 中未找到目录页");
             }
 
             // 阶段二：从目录所在批开始累积读完整目录
@@ -654,7 +696,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 var result = await service.GenerateVisionTocAsync(tocImages, isLastBatch, firstPageNumber: tocStart + 1);
                 if (!result.HasToc)
                 {
-                    return false;
+                    return (false, "目录读取中断（模型未再识别到目录）");
                 }
                 if (!result.TocComplete)
                 {
@@ -670,49 +712,179 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             }
             if (toc is null || toc.Bookmarks.Count == 0)
             {
-                return false;
+                return (false, "目录读取失败或目录为空");
             }
 
             SetGenerationStatus("目录读取成功，正在核对章节页码与 PDF 页码的偏移…");
-            var offset = await ConfirmVisionOffsetAsync(service, document, pageCount, toc, tocStart + tocImages.Count);
+            var (offset, failReason) = await ConfirmVisionOffsetAsync(service, document, pageCount, toc, tocStart + tocImages.Count);
             if (offset is null)
             {
-                return false;
+                return (false, failReason ?? "无法确认章节页码偏移");
             }
 
             var bookmarks = BookmarkLocator.ShiftPages(toc.Bookmarks, offset.Value, pageCount);
             ApplyBookmarkPreview(bookmarks, pageCount);
-            return true;
+            return (true, null);
         }
         catch (LlmOutputTruncatedException)
         {
+            return (false, "模型输出被截断，请重试");
+        }
+    }
+
+    /// <summary>章节标题与视觉定位结果匹配：去空白后相等，或较长标题包含较短标题（≥3 字）。</summary>
+    private static bool TitleMatches(string a, string b)
+    {
+        var na = NormalizeTitle(a);
+        var nb = NormalizeTitle(b);
+        if (na.Length == 0 || nb.Length == 0)
+        {
             return false;
         }
+        if (string.Equals(na, nb, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        return (na.Length >= 3 && na.Contains(nb, StringComparison.OrdinalIgnoreCase))
+            || (nb.Length >= 3 && nb.Contains(na, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>把接近的偏移（差距 ≤2 页）聚为一簇，返回按偏移升序排列的簇列表。</summary>
+    private static List<List<int>> ClusterOffsets(IEnumerable<int> offsets)
+    {
+        var sorted = offsets.OrderBy(o => o).ToList();
+        var clusters = new List<List<int>>();
+        foreach (var offset in sorted)
+        {
+            var cluster = clusters.LastOrDefault(c => offset - c[^1] <= 2);
+            if (cluster is null)
+            {
+                clusters.Add(new List<int> { offset });
+            }
+            else
+            {
+                cluster.Add(offset);
+            }
+        }
+        return clusters;
+    }
+
+    /// <summary>从聚簇后的偏移取值：众数优先（并列取中间值），全部唯一时取中位数。</summary>
+    private static int PickOffset(List<int> offsets)
+    {
+        var byCount = offsets
+            .GroupBy(v => v)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key)
+            .ToList();
+        var maxCount = byCount[0].Count();
+        if (maxCount == 1)
+        {
+            return offsets[offsets.Count / 2];
+        }
+        var top = byCount.Where(g => g.Count() == maxCount).Select(g => g.Key).ToList();
+        return top[top.Count / 2];
+    }
+
+    /// <summary>
+    /// 用章节标题定位校准已确认的偏移：在推算页前后各 2 页内让视觉模型定位章节标题，
+    /// 多个章节的偏差多数一致（|偏差| ≤1）时修正偏移，抵消页码识别或目录页码的系统性 ±1 误差。
+    /// </summary>
+    private static async Task<int> CalibrateOffsetWithTitlesAsync(
+        OpenAiCompatibleService service,
+        PdfRenderService document,
+        int pageCount,
+        TocResult toc,
+        int offset)
+    {
+        var chapters = toc.Bookmarks
+            .Where(b => b.Children.Count > 0 || b.Title.Contains('章'))
+            .Take(3)
+            .ToList();
+        if (chapters.Count == 0)
+        {
+            chapters = toc.Bookmarks.Take(3).ToList();
+        }
+        if (chapters.Count == 0)
+        {
+            return offset;
+        }
+
+        const int verifySpan = 5;
+        var deltas = new List<int>();
+        foreach (var chapter in chapters)
+        {
+            var predicted = chapter.PageIndex + offset + 1; // 1 基 PDF 页
+            var start = Math.Max(0, predicted - 2);
+            var count = Math.Min(verifySpan, pageCount - start);
+            var images = await Task.Run(() => RenderPageImages(document, start, count));
+            var pages = await service.LocateChapterPagesAsync(new[] { chapter }, images, start + 1);
+            var hit = pages.FirstOrDefault(p => TitleMatches(chapter.Title, p.Title));
+            if (hit is not null && Math.Abs(hit.PageNumber - predicted) <= 1)
+            {
+                deltas.Add(hit.PageNumber - predicted);
+            }
+        }
+        if (deltas.Count < 2)
+        {
+            return offset;
+        }
+        var groups = deltas.GroupBy(d => d).OrderByDescending(g => g.Count()).ToList();
+        if (groups[0].Count() > 1 || groups[0].Key == 0)
+        {
+            return offset + groups[0].Key;
+        }
+        return offset;
     }
 
     /// <summary>
     /// 分窗口渲染目录之后的页面，让视觉模型定位前几个章节标题的真实页码；
     /// 多个章节偏移一致（≥2）时确认偏移，并用确认偏移修正被模型重置的章节页码。
     /// </summary>
-    private static async Task<int?> ConfirmVisionOffsetAsync(
+    private static async Task<(int? Offset, string? FailReason)> ConfirmVisionOffsetAsync(
         OpenAiCompatibleService service,
         PdfRenderService document,
         int pageCount,
         TocResult toc,
         int tocPdfPages)
     {
+        // 方案一：识别页眉/页脚书本页码直接确认偏移，比章节标题定位更精确
+        const int numberWindowPages = 20;
+        if (tocPdfPages < pageCount)
+        {
+            var numberCount = Math.Min(numberWindowPages, pageCount - tocPdfPages);
+            var numberImages = await Task.Run(() => RenderPageImages(document, tocPdfPages, numberCount));
+            var locatedNumbers = await service.LocatePageNumbersAsync(numberImages, tocPdfPages + 1);
+            var numberClusters = ClusterOffsets(locatedNumbers.Select(p => p.PdfPage - p.BookPage));
+            var bestNumberCluster = numberClusters.OrderByDescending(c => c.Count).FirstOrDefault();
+            if (bestNumberCluster is not null
+                && bestNumberCluster.Count >= 3
+                && numberClusters.Where(c => c != bestNumberCluster).Sum(c => c.Count) < bestNumberCluster.Count)
+            {
+                var pageNumberOffset = PickOffset(bestNumberCluster);
+                // 页码识别可能有系统性 ±1 误差，用章节标题定位做最终校准
+                pageNumberOffset = await CalibrateOffsetWithTitlesAsync(service, document, pageCount, toc, pageNumberOffset);
+                return (pageNumberOffset, null);
+            }
+        }
+
         var chapters = toc.Bookmarks
             .Where(b => b.Children.Count > 0 || b.Title.Contains('章'))
             .Take(6)
             .ToList();
         if (chapters.Count < 2)
         {
-            return null;
+            // 目录标题不含"章"字或无子节点时，放宽为直接取前几个顶层条目
+            chapters = toc.Bookmarks.Take(6).ToList();
+        }
+        if (chapters.Count < 2)
+        {
+            return (null, "目录条目不足，无法核对页码偏移");
         }
 
         const int windowPages = 20;
         var located = new List<(LlmBookmark Chapter, int RealPdfPage)>();
-        for (var window = 0; window < 4 && located.Count < 3; window++)
+        for (var window = 0; window < 8 && located.Count < 5; window++)
         {
             var start = tocPdfPages + window * windowPages;
             if (start >= pageCount)
@@ -724,7 +896,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var pages = await service.LocateChapterPagesAsync(chapters, images, start + 1);
             foreach (var page in pages)
             {
-                var chapter = chapters.FirstOrDefault(c => c.Title == page.Title);
+                var chapter = chapters.FirstOrDefault(c => TitleMatches(c.Title, page.Title));
                 if (chapter is not null && !located.Any(l => l.Chapter == chapter))
                 {
                     located.Add((chapter, page.PageNumber));
@@ -733,20 +905,21 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         if (located.Count < 2)
         {
-            return null;
+            return (null, $"在目录后最多 160 页内仅定位到 {located.Count} 个章节标题（需 ≥2 个）");
         }
 
-        var offsets = located
+        // 视觉定位与目录页码可能各有 1~2 页误差，把接近的偏移聚为一簇，取最大簇中位数作为确认偏移
+        var rawOffsets = located
             .Select(l => l.RealPdfPage - 1 - l.Chapter.PageIndex)
-            .GroupBy(o => o)
-            .OrderByDescending(g => g.Count())
             .ToList();
-        var best = offsets[0];
-        if (best.Count() < 2 || (offsets.Count > 1 && offsets[1].Count() == best.Count()))
+        var clusters = ClusterOffsets(rawOffsets);
+        var bestCluster = clusters.OrderByDescending(c => c.Count).First();
+        var otherVotes = clusters.Where(c => c != bestCluster).Sum(c => c.Count);
+        if (bestCluster.Count < 2 || otherVotes >= bestCluster.Count)
         {
-            return null; // 票数不足或并列，无法确认
+            return (null, $"已定位 {located.Count} 个章节标题，但页码偏移不一致（{string.Join("、", rawOffsets)}），无法确认");
         }
-        var offset = best.Key;
+        var offset = PickOffset(bestCluster);
 
         // 用确认偏移反推章节应有页码，修正模型可能重置的页码（整棵子树一起平移）
         var locatedDeltas = new List<int>();
@@ -773,7 +946,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 }
             }
         }
-        return offset;
+        return (offset, null);
     }
 
     /// <summary>把 AI 结果展示到预览窗口，确认后应用到侧边栏书签树。</summary>    /// <summary>把 AI 结果展示到预览窗口，确认后应用到侧边栏书签树。</summary>    /// <summary>把 AI 结果展示到预览窗口，确认后应用到侧边栏书签树。</summary>
