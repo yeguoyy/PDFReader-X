@@ -370,6 +370,22 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return shifted;
     }
 
+    /// <summary>提示用户配置 LLM 并打开设置页；返回 false 表示用户取消。</summary>
+    private bool PromptForLlmConfiguration(string message)
+    {
+        var result = MessageBox.Show(
+            message,
+            "PDFReader X",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Information);
+        if (result != MessageBoxResult.Yes)
+        {
+            return false;
+        }
+        OpenSettings();
+        return true;
+    }
+
     private void OpenLlmSettings()
     {
         var window = new LlmSettingsWindow { Owner = Application.Current.MainWindow };
@@ -392,8 +408,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var settings = LlmSettingsStore.Load();
         if (string.IsNullOrWhiteSpace(settings.ApiKey))
         {
-            StatusText = "请先配置 LLM 设置";
-            OpenLlmSettings();
+            if (!PromptForLlmConfiguration(
+                    "使用 AI 书签需要先配置大模型 API Key。\n\n" +
+                    "默认使用阿里云百炼（DashScope）：\n" +
+                    "1. 打开 bailian.console.aliyun.com 申请 API Key\n" +
+                    "2. 在「设置 → LLM 设置」中粘贴 Key 并确认模型名称\n\n" +
+                    "现在打开设置页面配置吗？"))
+            {
+                StatusText = "未配置 API Key，已取消生成";
+                return;
+            }
             settings = LlmSettingsStore.Load();
             if (string.IsNullOrWhiteSpace(settings.ApiKey))
             {
@@ -622,9 +646,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         var settings = LlmSettingsStore.Load();
         if (string.IsNullOrWhiteSpace(settings.VisionModel))
         {
-            StatusText = "未配置视觉模型，请先在 LLM 设置中填写";
-            OpenLlmSettings();
-            return;
+            if (!PromptForLlmConfiguration(
+                    "扫描版 PDF 需要视觉模型识别页面图片，请先在「设置 → LLM 设置」中填写视觉模型名称\n" +
+                    "（建议 qwen 视觉系列，如 qwen3.7-flash-2026-07-15）。\n\n" +
+                    "现在打开设置页面配置吗？"))
+            {
+                StatusText = "未配置视觉模型，已取消生成";
+                return;
+            }
+            settings = LlmSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(settings.VisionModel))
+            {
+                StatusText = "未配置视觉模型，已取消生成";
+                return;
+            }
         }
 
         var service = new OpenAiCompatibleService(settings);

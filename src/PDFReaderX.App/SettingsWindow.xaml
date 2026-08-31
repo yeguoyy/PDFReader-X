@@ -14,7 +14,10 @@
 
         <TabControl>
             <TabItem Header="LLM 设置">
-                <Grid x:Name="LlmPanel" Margin="8">
+                <StackPanel>
+                    <TextBlock Text="使用 AI 书签前需先配置：API Key 可在阿里云百炼控制台（bailian.console.aliyun.com）申请，模型建议用 qwen 系列（文本 + 视觉）。"
+                               Foreground="#FFC77700" TextWrapping="Wrap" Margin="4,6,4,0"/>
+                    <Grid x:Name="LlmPanel" Margin="8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
@@ -61,6 +64,7 @@
                         <Button Content="取消" Width="80" Margin="4" IsCancel="True"/>
                     </StackPanel>
                 </Grid>
+                </StackPanel>
             </TabItem>
 
             <TabItem Header="书签">

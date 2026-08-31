@@ -397,6 +397,18 @@ public sealed class OpenAiCompatibleService
     {
         var document = ExtractJson(json);
         using var root = JsonDocument.Parse(document);
+        // 模型可能直接输出顶层书签数组（未按对象格式包裹），按有目录处理
+        if (root.RootElement.ValueKind == JsonValueKind.Array)
+        {
+            var arrayNodes = ParseNodes(root.RootElement);
+            NormalizePageNumbers(arrayNodes);
+            RepairTopLevelPages(arrayNodes);
+            return new TocResult { HasToc = true, TocComplete = true, Bookmarks = arrayNodes };
+        }
+        if (root.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            return new TocResult { HasToc = false };
+        }
         var hasToc = root.RootElement.TryGetProperty("hasToc", out var hasTocElement)
             && hasTocElement.ValueKind == JsonValueKind.True;
         if (!hasToc)
@@ -741,12 +753,18 @@ public sealed class OpenAiCompatibleService
 
         var document = ExtractJson(contentText);
         using var root = JsonDocument.Parse(document);
-        if (!root.RootElement.TryGetProperty("pages", out var pages) || pages.ValueKind != JsonValueKind.Array)
+        if (root.RootElement.ValueKind != JsonValueKind.Object
+            || !root.RootElement.TryGetProperty("pages", out var pages)
+            || pages.ValueKind != JsonValueKind.Array)
         {
             return result;
         }
         foreach (var item in pages.EnumerateArray())
         {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
             var title = item.TryGetProperty("title", out var titleElement) ? titleElement.GetString()?.Trim() : null;
             if (string.IsNullOrEmpty(title))
             {
@@ -836,12 +854,18 @@ public sealed class OpenAiCompatibleService
 
         var document = ExtractJson(contentText);
         using var root = JsonDocument.Parse(document);
-        if (!root.RootElement.TryGetProperty("pages", out var pages) || pages.ValueKind != JsonValueKind.Array)
+        if (root.RootElement.ValueKind != JsonValueKind.Object
+            || !root.RootElement.TryGetProperty("pages", out var pages)
+            || pages.ValueKind != JsonValueKind.Array)
         {
             return result;
         }
         foreach (var item in pages.EnumerateArray())
         {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
             if (item.TryGetProperty("image", out var imageElement)
                 && imageElement.TryGetInt32(out var image)
                 && image > 0
@@ -1002,7 +1026,8 @@ public sealed class OpenAiCompatibleService
         {
             array = root.RootElement;
         }
-        else if (root.RootElement.TryGetProperty("bookmarks", out var bookmarks))
+        else if (root.RootElement.ValueKind == JsonValueKind.Object
+            && root.RootElement.TryGetProperty("bookmarks", out var bookmarks))
         {
             array = bookmarks;
         }
@@ -1075,6 +1100,10 @@ public sealed class OpenAiCompatibleService
 
         foreach (var item in array.EnumerateArray())
         {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue; // 非对象条目（如字符串、数字）跳过
+            }
             var title = item.TryGetProperty("title", out var titleElement)
                 ? titleElement.GetString()?.Trim()
                 : null;

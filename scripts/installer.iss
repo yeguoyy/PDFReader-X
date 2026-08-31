@@ -2,7 +2,7 @@
 ; 用法: 安装 Inno Setup 6 后运行 scripts\publish.ps1 dist
 
 #define MyAppName "PDFReader X"
-#define MyAppVersion "1.0.2"
+#define MyAppVersion "1.0.3"
 #define MyAppExeName "PDFReaderX.App.exe"
 #define MyAppPublisher "PDFReaderX"
 

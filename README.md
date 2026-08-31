@@ -2,7 +2,7 @@
 
 > OneNote 风格的 PDF 阅读与手写批注工具 · WPF / .NET 8
 
-![版本](https://img.shields.io/badge/版本-v1.0.2-2D6CDF?style=flat-square)
+![版本](https://img.shields.io/badge/版本-v1.0.3-2D6CDF?style=flat-square)
 ![框架](https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square)
 ![平台](https://img.shields.io/badge/平台-Windows%2010%2F11%20x64-0078D6?style=flat-square)
 
@@ -32,7 +32,7 @@
 - 🗂️ **缩略图导航**：侧边栏缩略图快速定位，当前页高亮并自动跟随
 - 🔖 **书签目录**：读取 PDF 自带目录，分层树状展示，点击跳转
 
-**AI 书签（可选 LLM 配置）**
+**AI 书签（需先配置 LLM，默认阿里云百炼）**
 
 - 🧠 **自动识别目录**：逐批轻量探测，找到目录后读取完整目录，核对章节偏移推算书签
 - 📖 **扫描版支持**：无文字层时用视觉模型识别目录与页码
@@ -54,8 +54,8 @@
 
 从 [GitHub Releases](https://github.com/yeguoyy/PDFReader-X/releases) 获取：
 
-- `PDFReaderX-win-x64.zip` —— 免安装，解压即用
-- `PDFReaderX-Setup-1.0.2.exe` —— 安装包
+- `PDFReaderX-win-x64-1.0.3.zip` —— 免安装，解压即用
+- `PDFReaderX-Setup-1.0.3.exe` —— 安装包
 
 > 自包含单文件，无需额外安装 .NET 运行时。
 
@@ -97,11 +97,20 @@ PDFReaderX.App.exe "文档.pdf"
 
 ## 🧠 AI 书签
 
-在「设置 → LLM 设置」中配置（OpenAI 兼容格式，默认阿里云百炼 DashScope）：
+> ⚠️ **使用前必读**：AI 书签需要调用大模型 API，**第一次使用前请先在「设置 → LLM 设置」中填写 API Key**，否则点击生成会提示未配置并跳转到设置页。
 
-- API 地址 / Key / 文本模型 / 视觉模型，保存在本机 `%AppData%\PDFReaderX\llm-settings.json`
+默认使用**阿里云百炼（DashScope）**的 OpenAI 兼容接口：
 
-**工作策略**：10 页一批轻量探测目录 → 找到目录后读取完整目录 → 再读章节起始页确认「PDF 页数与书本页数」的偏移 → 推算全部书签；全书无目录则停止并提示，不浪费 token。
+| 配置项 | 填写内容 |
+| --- | --- |
+| API 地址 | `https://dashscope.aliyuncs.com/compatible-mode/v1`（默认已填好，一般无需修改） |
+| API Key | 在[阿里云百炼控制台](https://bailian.console.aliyun.com/)申请并复制，仅保存在本机 |
+| 文本模型 | 建议 qwen 系列（如 `qwen3.7-plus`），用于可提取文字的 PDF |
+| 视觉模型 | 建议 qwen 视觉系列（如 `qwen3.7-flash-2026-07-15`），用于扫描版 PDF 识别页面图片 |
+
+所有配置只保存在本机 `%AppData%\PDFReaderX\llm-settings.json`，不会进入项目仓库。
+
+**工作策略**：10 页一批轻量探测目录 → 找到目录后读取完整目录 → 识别页眉页码 / 章节起始页确认「PDF 页数与书本页数」的偏移 → 推算全部书签；全书无目录则停止并提示，不浪费 token。
 
 ---
 
@@ -121,7 +130,7 @@ PDFReaderX.App.exe "文档.pdf"
 # 免安装单文件包：dist/PDFReaderX-win-x64.zip
 .\scripts\publish.ps1 pack
 
-# 安装包：dist/installer/PDFReaderX-Setup-1.0.2.exe（需先安装 Inno Setup 6）
+# 安装包：dist/installer/PDFReaderX-Setup-1.0.3.exe（需先安装 Inno Setup 6）
 .\scripts\publish.ps1 dist
 ```
 
@@ -140,6 +149,13 @@ PDFReaderX.sln
 ```
 
 ## 📝 更新日志
+
+### v1.0.3
+
+- 修复 `.pdfrx` 保存后子级书签丢失的问题
+- 增强 AI 书签响应解析兼容性，减少异常 JSON 导致生成失败
+- 未配置 API Key 或视觉模型时弹窗引导到 LLM 设置
+- README 和设置页补充阿里云百炼 API Key 配置说明
 
 ### v1.0.2
 
