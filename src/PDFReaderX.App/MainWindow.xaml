@@ -468,7 +468,8 @@
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="220" MinWidth="160"/>
+                <ColumnDefinition x:Name="SidebarColumn" Width="220" MinWidth="160"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
@@ -596,7 +597,17 @@
                 </TabItem>
             </TabControl>
 
-            <Grid Grid.Column="1" Margin="4">
+            <ToggleButton x:Name="SidebarToggle" Grid.Column="1" VerticalAlignment="Center"
+                          Width="14" Height="52" Margin="-1,0,1,0" Padding="0"
+                          Focusable="False" Click="OnSidebarToggleClick"
+                          ToolTip="折叠侧栏">
+                <Path x:Name="SidebarToggleIcon" Data="M 8 3 L 3 10 L 8 17"
+                      Stroke="#FF666666" StrokeThickness="1.6"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                      StrokeLineJoin="Round"/>
+            </ToggleButton>
+
+            <Grid Grid.Column="2" Margin="1,4,4,4">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>

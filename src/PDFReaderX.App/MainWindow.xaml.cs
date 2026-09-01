@@ -601,6 +601,18 @@ public partial class MainWindow : Window
         Canvas.Undo();
     }
 
+    /// <summary>折叠/展开左侧缩略图与书签栏。</summary>
+    private void OnSidebarToggleClick(object sender, RoutedEventArgs e)
+    {
+        var collapsed = SidebarColumn.Width.IsAbsolute && SidebarColumn.Width.Value < 1;
+        SidebarColumn.Width = collapsed ? new GridLength(220) : new GridLength(0);
+        SidebarColumn.MinWidth = collapsed ? 160 : 0;
+        SidebarToggleIcon.Data = collapsed
+            ? Geometry.Parse("M 5 3 L 10 10 L 5 17")
+            : Geometry.Parse("M 8 3 L 3 10 L 8 17");
+        SidebarToggle.ToolTip = collapsed ? "折叠侧栏" : "展开侧栏";
+    }
+
     private void OnRedoClick(object sender, RoutedEventArgs e)
     {
         Canvas.Redo();

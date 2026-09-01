@@ -24,7 +24,7 @@ public partial class InfiniteCanvas : UserControl
 {
     public const double MinZoom = 0.25;
     public const double MaxZoom = 4.0;
-    private const double MaxRenderDpi = 240;
+    private const double MaxRenderDpi = 384;
     private int MaxCachedPages => PerformanceMode ? 3 : 6; // 性能模式减少缓存页数，降低内存占用
     private const double WheelScrollStep = 40;
 
@@ -104,7 +104,9 @@ public partial class InfiniteCanvas : UserControl
     private InkCanvas? _freeInk;
     private InkCanvas? _liveInk;
     private readonly Dictionary<int, Rectangle> _imagesByPage = new();
-    private readonly Dictionary<int, BitmapSource> _bitmapCache = new();
+    private sealed record RenderedPage(BitmapSource Bitmap, int Dpi);
+
+    private readonly Dictionary<int, RenderedPage> _bitmapCache = new();
     private readonly List<int> _cacheOrder = new();
     private readonly HashSet<int> _pendingRenders = new();
 
@@ -693,12 +695,18 @@ public partial class InfiniteCanvas : UserControl
                 {
                     if (_bitmapCache.TryGetValue(page.PageIndex, out var cached))
                     {
-                        ((ImageBrush)image.Fill).ImageSource = cached;
+                        ((ImageBrush)image.Fill).ImageSource = cached.Bitmap;
                     }
                     else
                     {
                         RenderPageAsync(page);
                     }
+                }
+                else if (_bitmapCache.TryGetValue(page.PageIndex, out var cached)
+                    && Math.Abs(cached.Dpi - Math.Min(96.0 * Zoom, PerformanceMode ? 144.0 : MaxRenderDpi)) > 12)
+                {
+                    // 缩放后缓存与目标 DPI 差距明显时重渲染，避免放大文字模糊。
+                    RenderPageAsync(page);
                 }
             }
             else if (((ImageBrush)image.Fill).ImageSource is not null)
@@ -745,11 +753,11 @@ public partial class InfiniteCanvas : UserControl
                 using var bitmap = document.RenderPage(index, (int)dpi);
                 var source = bitmap.ToBitmapSource();
                 source.Freeze();
-                return (BitmapSource?)source;
+                return (SourceResolution: (int)Math.Round(dpi), Bitmap: (BitmapSource?)source);
             }
             catch
             {
-                return null;
+                return (SourceResolution: 0, Bitmap: null);
             }
 
         }).ContinueWith(t =>
@@ -760,7 +768,7 @@ public partial class InfiniteCanvas : UserControl
                 return;
             }
 
-            var source = t.Result;
+            var source = t.Result.Bitmap;
             if (source is null)
             {
                 // 渲染失败：状态栏提示 + 页面显示占位文本
@@ -771,7 +779,7 @@ public partial class InfiniteCanvas : UserControl
                 return;
             }
 
-            _bitmapCache[index] = source;
+            _bitmapCache[index] = new RenderedPage(source, t.Result.SourceResolution);
             _cacheOrder.Remove(index);
             _cacheOrder.Add(index);
             while (_cacheOrder.Count > MaxCachedPages)
@@ -784,15 +792,6 @@ public partial class InfiniteCanvas : UserControl
             if (_imagesByPage.TryGetValue(index, out var image))
             {
                 ((ImageBrush)image.Fill).ImageSource = source;
-                var imgPos = image.TransformToAncestor(ViewportCanvas).Transform(new System.Windows.Point(0, 0));
-                if (_inkCanvases.TryGetValue(index, out var inkRef))
-                {
-                    var inkPos = inkRef.TransformToAncestor(ViewportCanvas).Transform(new System.Windows.Point(0, 0));
-                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
-                {
-                    var lateImg = image.TransformToAncestor(ViewportCanvas).Transform(new System.Windows.Point(0, 0));
-                });
-                }
             }
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
@@ -1329,13 +1328,19 @@ public partial class InfiniteCanvas : UserControl
     /// <summary>擦除指定图层中与圆形区域相交的笔画，并逐笔记录撤销。</summary>
     private void EraseStrokesAt(InkCanvas ink, Point local, double diameter)
     {
-        var hits = ink.Strokes.HitTest(local, diameter);
-        if (hits.Count == 0)
+        var circle = new EllipseGeometry(
+            local,
+            Math.Max(0.5, diameter / 2.0),
+            Math.Max(0.5, diameter / 2.0));
+        foreach (var stroke in ink.Strokes.ToList())
         {
-            return;
-        }
-        foreach (var stroke in hits.ToList())
-        {
+            var geometry = stroke.GetGeometry();
+            var eraserPen = new Pen(Brushes.Transparent, 0.5);
+            if (geometry.FillContainsWithDetail(circle) == IntersectionDetail.Empty
+                && !geometry.StrokeContains(eraserPen, local))
+            {
+                continue;
+            }
             ink.Strokes.Remove(stroke);
             RecordUndo(
                 undo: () => ink.Strokes.Add(stroke),
@@ -1349,8 +1354,9 @@ public partial class InfiniteCanvas : UserControl
         var strokes = ((InkCanvas)sender!).Strokes;
         RecordUndo(
             undo: () => strokes.Add(stroke),
-            redo: () => strokes.Remove(stroke));
+        redo: () => strokes.Remove(stroke));
     }
+
 
     // ---------- 触摸输入（单指平移 / 双指缩放） ----------
 
@@ -1600,7 +1606,7 @@ public partial class InfiniteCanvas : UserControl
         if (ActiveTool == InkTool.Highlighter)
         {
             var color = HighlightColor;
-            color.A = 0x55; // 半透明
+            color.A = 0x2E; // 轻、通透；避免文字被大面积色块盖住
             return new DrawingAttributes
             {
                 Color = color,
