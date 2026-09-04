@@ -468,14 +468,18 @@
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="SidebarColumn" Width="220" MinWidth="160"/>
-                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition x:Name="SidebarColumn" Width="220" MinWidth="160" MaxWidth="450"/>
+                <ColumnDefinition Width="12"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <TabControl Grid.Column="0" Margin="4,4,0,4">
+            <TabControl Grid.Column="0" Margin="4,4,0,4"
+                        PreviewMouseWheel="OnSidebarPreviewMouseWheel">
+                <TabControl.Resources>
+                    <ScaleTransform x:Key="SidebarScaleTransform" ScaleX="1" ScaleY="1"/>
+                </TabControl.Resources>
                 <TabItem Header="缩略图">
-                    <Grid>
+                    <Grid x:Name="ThumbnailTabContent" LayoutTransform="{StaticResource SidebarScaleTransform}">
                         <ListBox x:Name="ThumbnailList"
                                  ItemsSource="{Binding Thumbnails}"
                                  Background="Transparent" BorderThickness="0"
@@ -535,7 +539,7 @@
                     </Grid>
                 </TabItem>
                 <TabItem Header="书签">
-                    <Grid>
+                    <Grid x:Name="BookmarkTabContent" LayoutTransform="{StaticResource SidebarScaleTransform}">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
@@ -548,15 +552,113 @@
                                 <Style TargetType="TreeViewItem">
                                     <Setter Property="IsExpanded" Value="True"/>
                                     <Setter Property="Margin" Value="0,1"/>
+                                    <Setter Property="Padding" Value="0"/>
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    <Setter Property="Foreground" Value="#FF222222"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="TreeViewItem">
+                                                <StackPanel>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="14"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <ToggleButton Name="Expander"
+                                                                      Grid.Column="0"
+                                                                      ClickMode="Press"
+                                                                      IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}"
+                                                                      Focusable="False">
+                                                            <ToggleButton.Template>
+                                                                <ControlTemplate TargetType="ToggleButton">
+                                                                    <Border Background="Transparent">
+                                                                        <Path Name="Chevron"
+                                                                              HorizontalAlignment="Center"
+                                                                              VerticalAlignment="Center"
+                                                                              Data="M 3 1 L 8 6 L 3 11"
+                                                                              Stroke="#FF808080"
+                                                                              StrokeThickness="1.5"
+                                                                              StrokeStartLineCap="Round"
+                                                                              StrokeEndLineCap="Round"
+                                                                              RenderTransformOrigin="0.5,0.5">
+                                                                            <Path.RenderTransform>
+                                                                                <RotateTransform Angle="0"/>
+                                                                            </Path.RenderTransform>
+                                                                        </Path>
+                                                                    </Border>
+                                                                    <ControlTemplate.Triggers>
+                                                                        <Trigger Property="IsChecked" Value="True">
+                                                                            <Setter TargetName="Chevron" Property="RenderTransform">
+                                                                                <Setter.Value>
+                                                                                    <RotateTransform Angle="90"/>
+                                                                                </Setter.Value>
+                                                                            </Setter>
+                                                                        </Trigger>
+                                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                                            <Setter TargetName="Chevron" Property="Stroke" Value="#FF007ACC"/>
+                                                                        </Trigger>
+                                                                    </ControlTemplate.Triggers>
+                                                                </ControlTemplate>
+                                                            </ToggleButton.Template>
+                                                        </ToggleButton>
+                                                        <Border Name="ItemBorder"
+                                                                Grid.Column="1"
+                                                                Background="{TemplateBinding Background}"
+                                                                BorderBrush="Transparent"
+                                                                BorderThickness="0"
+                                                                CornerRadius="4"
+                                                                Padding="6,4">
+                                                            <ContentPresenter Name="PART_Header"
+                                                                              ContentSource="Header"
+                                                                              HorizontalAlignment="Stretch"/>
+                                                        </Border>
+                                                    </Grid>
+                                                    <ItemsPresenter Name="ItemsHost" Margin="14,0,0,0"/>
+                                                </StackPanel>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="HasItems" Value="False">
+                                                        <Setter TargetName="Expander" Property="Visibility" Value="Hidden"/>
+                                                    </Trigger>
+                                                    <Trigger SourceName="ItemBorder" Property="IsMouseOver" Value="True">
+
+                                                        <Setter TargetName="ItemBorder" Property="Background" Value="#FFF1F5FA"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="ItemBorder" Property="Background" Value="#FFE4F0FA"/>
+                                                        <Setter TargetName="ItemBorder" Property="BorderBrush" Value="#FFB9D7F2"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                            <Setter Property="Foreground" Value="#FF007ACC"/>
+                                            <Setter Property="Background" Value="#FFF5FAFF"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
                                 </Style>
                             </TreeView.ItemContainerStyle>
                             <TreeView.ItemTemplate>
                                 <HierarchicalDataTemplate ItemsSource="{Binding Children}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
-                                        <TextBlock Text="{Binding PageLabel}" Foreground="Gray"
-                                                   FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
-                                    </StackPanel>
+                                    <Grid HorizontalAlignment="Stretch">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding Title}"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="13"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Title}"/>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding PageLabel}"
+                                                   Foreground="#FF7F7F7F"
+                                                   FontSize="11"
+                                                   Margin="10,0,0,0"
+                                                   VerticalAlignment="Center"/>
+                                    </Grid>
                                 </HierarchicalDataTemplate>
                             </TreeView.ItemTemplate>
                         </TreeView>
@@ -597,17 +699,22 @@
                 </TabItem>
             </TabControl>
 
-            <ToggleButton x:Name="SidebarToggle" Grid.Column="1" VerticalAlignment="Center"
-                          Width="14" Height="52" Margin="-1,0,1,0" Padding="0"
-                          Focusable="False" Click="OnSidebarToggleClick"
-                          ToolTip="折叠侧栏">
-                <Path x:Name="SidebarToggleIcon" Data="M 8 3 L 3 10 L 8 17"
-                      Stroke="#FF666666" StrokeThickness="1.6"
-                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                      StrokeLineJoin="Round"/>
-            </ToggleButton>
+            <Grid Grid.Column="1">
+                <Thumb x:Name="SidebarSplitter" DragDelta="OnSidebarSplitterDragDelta"
+                       Cursor="SizeWE"
+                       Background="#FFE5E5E5" ToolTip="拖动调整侧栏宽度"/>
+                <ToggleButton x:Name="SidebarToggle" VerticalAlignment="Center" HorizontalAlignment="Center"
+                              Width="14" Height="52" Margin="0" Padding="0"
+                              Focusable="False" Click="OnSidebarToggleClick"
+                              ToolTip="折叠侧栏">
+                    <Path x:Name="SidebarToggleIcon" Data="M 8 3 L 3 10 L 8 17"
+                          Stroke="#FF666666" StrokeThickness="1.6"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          StrokeLineJoin="Round"/>
+                </ToggleButton>
+            </Grid>
 
-            <Grid Grid.Column="2" Margin="1,4,4,4">
+            <Grid Grid.Column="2" Margin="0,4,4,4">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
@@ -617,6 +724,7 @@
                                              Background="White"
                                              Document="{Binding Document}"
                                              Pages="{Binding Pages}"
+                                             CurrentPageIndex="{Binding CurrentPageIndex, Mode=OneWayToSource}"
                                              Zoom="{Binding Zoom, Mode=TwoWay}"
                                              ActiveTool="{Binding ActiveTool}"
                                              PenColor="{Binding PenColor}"
@@ -673,5 +781,3 @@
         </Border>
     </Grid>
 </Window>
-
-

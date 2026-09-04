@@ -222,6 +222,9 @@ public partial class InfiniteCanvas : UserControl
         set => SetValue(CurrentPageIndexProperty, value);
     }
 
+    /// <summary>当前阅读页变化（视口滚动或主动跳页），供侧边栏联动。</summary>
+    public event EventHandler<int>? CurrentPageChanged;
+
     /// <summary>垂直滚动偏移：内容顶部相对视口顶部的距离（即 -_pan.Y）。</summary>
     /// <summary>画布水平平移量（世界坐标偏移，供 .pdfrx 保存）。</summary>
     public double PanX => _pan.X;
@@ -323,6 +326,7 @@ public partial class InfiniteCanvas : UserControl
         if (CurrentPageIndex != index)
         {
             CurrentPageIndex = index;
+            CurrentPageChanged?.Invoke(this, index);
             MarkModified();
         }
     }
@@ -828,6 +832,7 @@ public partial class InfiniteCanvas : UserControl
         }
         _pan.Y = -clamped;
         UpdatePanTransform();
+        RefreshLiveInkRenderer();
         ScheduleRerender();
         UpdateCurrentPage();
     }
@@ -866,6 +871,7 @@ public partial class InfiniteCanvas : UserControl
         _pan = new Point(x - newOffsetX, y);
         Zoom = newZoom; // 触发 OnZoomChanged → PanTransform + LayoutPages + 重渲染
         UpdatePanTransform();
+        RefreshLiveInkRenderer();
         UpdateCurrentPage();
         UpdateScrollState();
     }
@@ -879,6 +885,7 @@ public partial class InfiniteCanvas : UserControl
 
         _pan = new Point(_pan.X + dx, _pan.Y + dy);
         UpdatePanTransform();
+        RefreshLiveInkRenderer();
         ScheduleRerender();
         UpdateCurrentPage();
         UpdateScrollState();
@@ -1188,7 +1195,8 @@ public partial class InfiniteCanvas : UserControl
         RecordUndo(
             undo: () =>
             {
-                pageInk.Strokes.Add(stroke);
+                // 源笔画在 StrokeCollected 里已被移除；撤销时不要把它加回实时层，
+                // 否则第一次 Ctrl+Z 看起来“没有反应”。
                 foreach (var (target, s) in added)
                 {
                     target.Strokes.Remove(s);
@@ -1291,7 +1299,8 @@ public partial class InfiniteCanvas : UserControl
         RecordUndo(
             undo: () =>
             {
-                source.Strokes.Add(stroke);
+                // 源笔画是 InkCanvas 在事件前临时加入的，拆分后已移除；
+                // 撤销只需移除拆分结果，避免把原笔迹留在实时层。
                 foreach (var (target, s) in added)
                 {
                     target.Strokes.Remove(s);
@@ -1365,6 +1374,13 @@ public partial class InfiniteCanvas : UserControl
         // 触摸只用于平移/缩放，不写墨迹
         _touchActive = true;
         SetEditingModeNone();
+    }
+
+    private void OnPreviewTouchUp(object sender, TouchEventArgs e)
+    {
+        // 惯性滚动还会继续操作画布，但手指已经离开，不能继续把墨迹层锁在 None。
+        _touchActive = false;
+        UpdateEditingState();
     }
 
     private void OnManipulationStarting(object sender, ManipulationStartingEventArgs e)
@@ -1580,6 +1596,30 @@ public partial class InfiniteCanvas : UserControl
         }
     }
 
+    /// <summary>
+    /// WPF 的实时墨迹渲染器会缓存启用时的坐标转换。画布平移/缩放后如果不重启它，
+    /// 新笔画的动态预览可能仍按旧位置绘制，松手换成静态笔画后才跳到正确位置。
+    /// </summary>
+    private void RefreshLiveInkRenderer()
+    {
+        if (_liveInk is null || _liveInk.EditingMode != InkCanvasEditingMode.Ink)
+        {
+            return;
+        }
+
+        // 正在书写时不能重启渲染器，否则会截断当前笔画。
+        if (_liveInk.IsMouseCaptureWithin || _liveInk.IsStylusCaptureWithin)
+        {
+            return;
+        }
+
+        var mode = _liveInk.EditingMode;
+        _liveInk.EditingMode = InkCanvasEditingMode.None;
+        _liveInk.IsHitTestVisible = false;
+        _liveInk.EditingMode = mode;
+        _liveInk.IsHitTestVisible = mode != InkCanvasEditingMode.None;
+    }
+
     private void ApplyToolToInk(InkCanvas ink)
     {
         if (ReferenceEquals(ink, _liveInk))
@@ -1606,7 +1646,7 @@ public partial class InfiniteCanvas : UserControl
         if (ActiveTool == InkTool.Highlighter)
         {
             var color = HighlightColor;
-            color.A = 0x2E; // 轻、通透；避免文字被大面积色块盖住
+            color.A = 0x26; // 约 15% 透明度，保持文字清晰；仍比常见马克笔柔和
             return new DrawingAttributes
             {
                 Color = color,

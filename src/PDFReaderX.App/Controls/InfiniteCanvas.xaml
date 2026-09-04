@@ -10,6 +10,7 @@
           MouseMove="OnMouseMove"
           MouseUp="OnMouseUp"
           SizeChanged="OnSizeChanged"
+          PreviewTouchUp="OnPreviewTouchUp"
           ManipulationStarting="OnManipulationStarting"
           ManipulationDelta="OnManipulationDelta"
           ManipulationInertiaStarting="OnManipulationInertiaStarting"

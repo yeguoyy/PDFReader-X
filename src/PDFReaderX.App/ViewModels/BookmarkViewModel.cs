@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using PDFReaderX.Core.Services;
 
 namespace PDFReaderX.App.ViewModels;
@@ -23,6 +23,24 @@ public sealed class BookmarkViewModel : ViewModelBase
     public bool CanNavigate => PageIndex >= 0;
 
     public string PageLabel => PageIndex >= 0 ? $"第 {PageIndex + 1} 页" : string.Empty;
+
+    private bool _isCurrent;
+
+    /// <summary>是否对应阅读区当前页（由侧边栏联动设置）。</summary>
+    public bool IsCurrent
+    {
+        get => _isCurrent;
+        set
+        {
+            if (_isCurrent == value)
+            {
+                return;
+            }
+
+            _isCurrent = value;
+            OnPropertyChanged();
+        }
+    }
 
     public ObservableCollection<BookmarkViewModel> Children { get; } = new();
 

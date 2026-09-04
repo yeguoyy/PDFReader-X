@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+﻿﻿using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -18,6 +18,11 @@ public partial class MainWindow : Window
 {
     private bool _thumbnailListHover;
     private bool _bookmarksDirty;
+    private bool _isBookmarkSyncing;
+    private const double SidebarMinWidth = 160;
+    private const double SidebarMaxWidth = 450;
+    private double _lastSidebarWidth = 220;
+    private ScaleTransform _sidebarScaleTransform = new();
 
     // 快捷笔长按拖动排序
     private QuickPenStyle? _dragPenItem;
@@ -29,6 +34,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _sidebarScaleTransform = (ScaleTransform)ThumbnailTabContent.LayoutTransform;
         RestoreWindowBounds();
         _saveToastTimer.Tick += (_, _) =>
         {
@@ -37,42 +43,200 @@ public partial class MainWindow : Window
         };
         DataContextChanged += OnDataContextChanged;
         Canvas.UndoStateChanged += (_, _) => UpdateUndoButtons();
+        Canvas.CurrentPageChanged += OnCanvasCurrentPageChanged;
         UpdateUndoButtons();
+        RestoreSidebarWidth();
     }
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (e.OldValue is MainWindowViewModel oldViewModel)
         {
-            oldViewModel.PropertyChanged -= OnViewModelPropertyChanged;
             oldViewModel.PdfrxReady -= OnPdfrxReady;
             oldViewModel.DocumentOpened -= OnDocumentOpened;
             oldViewModel.Bookmarks.CollectionChanged -= OnBookmarksChanged;
         }
         if (e.NewValue is MainWindowViewModel newViewModel)
         {
-            newViewModel.PropertyChanged += OnViewModelPropertyChanged;
             newViewModel.PdfrxReady += OnPdfrxReady;
             newViewModel.DocumentOpened += OnDocumentOpened;
             newViewModel.Bookmarks.CollectionChanged += OnBookmarksChanged;
         }
     }
 
-    /// <summary>当前页变化时，让缩略图列表跟随滚动（鼠标悬停在列表上时不打扰用户）。</summary>
-    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    /// <summary>画布当前页变化：更新缩略图当前位置，并让书签定位/高亮到对应章节。</summary>
+    private void OnCanvasCurrentPageChanged(object? sender, int pageIndex)
     {
-        if (e.PropertyName != nameof(MainWindowViewModel.CurrentPageIndex)
-            || sender is not MainWindowViewModel viewModel
-            || _thumbnailListHover)
+        if (DataContext is not MainWindowViewModel viewModel)
         {
             return;
         }
 
-        var current = viewModel.Thumbnails.FirstOrDefault(t => t.PageIndex == viewModel.CurrentPageIndex);
-        if (current is not null)
+        viewModel.CurrentPageIndex = pageIndex;
+        if (!_thumbnailListHover)
         {
-            ThumbnailList.ScrollIntoView(current);
+            var thumbnail = viewModel.Thumbnails.FirstOrDefault(t => t.PageIndex == pageIndex);
+            if (thumbnail is not null)
+            {
+                ThumbnailList.ScrollIntoView(thumbnail);
+            }
         }
+
+        SyncBookmarkToPage(viewModel, pageIndex);
+    }
+
+    /// <summary>根据当前页选择最接近的书签；先展开父节点，再滚动到对应可视化项。</summary>
+    private void SyncBookmarkToPage(MainWindowViewModel viewModel, int pageIndex)
+    {
+        if (viewModel.Bookmarks.Count == 0)
+        {
+            return;
+        }
+
+        var target = FindBookmarkForPage(viewModel.Bookmarks, pageIndex);
+        if (target is null)
+        {
+            return;
+        }
+
+        _isBookmarkSyncing = true;
+        try
+        {
+            BringBookmarkIntoView(BookmarkTree, target);
+        }
+        finally
+        {
+            _isBookmarkSyncing = false;
+        }
+    }
+
+    private static BookmarkViewModel? FindBookmarkForPage(
+        IEnumerable<BookmarkViewModel> bookmarks, int pageIndex)
+    {
+        BookmarkViewModel? best = null;
+        void Visit(BookmarkViewModel item)
+        {
+            if (item.CanNavigate && item.PageIndex <= pageIndex)
+            {
+                if (best is null
+                    || item.PageIndex > best.PageIndex
+                    || (item.PageIndex == best.PageIndex && item.Children.Count > 0))
+                {
+                    best = item;
+                }
+            }
+
+            foreach (var child in item.Children)
+            {
+                Visit(child);
+            }
+        }
+
+        foreach (var bookmark in bookmarks)
+        {
+            Visit(bookmark);
+        }
+
+        return best;
+    }
+
+    private void BringBookmarkIntoView(TreeView tree, BookmarkViewModel bookmark)
+    {
+        // 先定位可视化项；虚拟化列表可能需要先让父节点显示出来。
+        var container = FindTreeContainer(tree, bookmark);
+        if (container is null)
+        {
+            container = RevealTreeContainer(tree, bookmark);
+        }
+
+        if (container is null)
+        {
+            return;
+        }
+
+        container.IsExpanded = true;
+        container.BringIntoView();
+        if (!container.IsSelected)
+        {
+            container.IsSelected = true;
+        }
+    }
+
+    private static TreeViewItem? FindTreeContainer(ItemsControl parent, object item)
+    {
+        if (parent.ItemContainerGenerator.ContainerFromItem(item) is TreeViewItem direct)
+        {
+            return direct;
+        }
+
+        foreach (object container in parent.Items)
+        {
+            if (parent.ItemContainerGenerator.ContainerFromItem(container) is TreeViewItem child
+                && FindTreeContainer(child, item) is { } result)
+            {
+                return result;
+            }
+        }
+
+        return null;
+    }
+
+    private TreeViewItem? RevealTreeContainer(TreeView tree, BookmarkViewModel bookmark)
+    {
+        var path = new List<BookmarkViewModel>();
+        for (var current = bookmark; current is not null;)
+        {
+            path.Insert(0, current);
+            current = FindParentBookmark(tree.Items.Cast<BookmarkViewModel>(), current);
+        }
+
+        ItemsControl parent = tree;
+        foreach (var item in path)
+        {
+            var container = parent.ItemContainerGenerator.ContainerFromItem(item) as TreeViewItem;
+            if (container is null)
+            {
+                // 父节点尚未生成子项时，先布局后再取一次。
+                parent.UpdateLayout();
+                container = parent.ItemContainerGenerator.ContainerFromItem(item) as TreeViewItem;
+            }
+
+            if (container is null
+                || (!ReferenceEquals(item, bookmark) && !container.IsExpanded && !container.HasItems))
+            {
+                return null;
+            }
+
+            container.IsExpanded = true;
+            if (!ReferenceEquals(item, bookmark))
+            {
+                container.BringIntoView();
+                parent.UpdateLayout();
+            }
+
+            parent = container;
+        }
+
+        return parent as TreeViewItem;
+    }
+
+    private static BookmarkViewModel? FindParentBookmark(
+        IEnumerable<BookmarkViewModel> candidates, BookmarkViewModel target)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Children.Contains(target))
+            {
+                return candidate;
+            }
+
+            if (FindParentBookmark(candidate.Children, target) is { } descendant)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
     }
 
     private bool _isExitingWithSave;
@@ -92,7 +256,32 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>保存当前窗口大小与最大化状态（最大化时记录还原尺寸）。</summary>
+    /// <summary>恢复侧栏宽度（限制在允许范围内），并同步折叠按钮状态。</summary>
+    private void RestoreSidebarWidth()
+    {
+        var settings = AppSettingsStore.Load();
+        if (settings.SidebarWidth is not { } savedWidth)
+        {
+            return;
+        }
+
+        _lastSidebarWidth = Math.Clamp(savedWidth, SidebarMinWidth, SidebarMaxWidth);
+        SidebarColumn.MinWidth = SidebarMinWidth;
+        SidebarColumn.MaxWidth = SidebarMaxWidth;
+        SidebarColumn.Width = new GridLength(_lastSidebarWidth);
+        SidebarToggle.ToolTip = "折叠侧栏";
+    }
+
+    /// <summary>把侧栏宽度写入应用配置，折叠时仍保留上次展开宽度。</summary>
+    private void SaveSidebarWidth()
+    {
+        var settings = AppSettingsStore.Load();
+        settings.SidebarWidth = SidebarColumn.ActualWidth > 1
+            ? SidebarColumn.ActualWidth
+            : _lastSidebarWidth;
+        AppSettingsStore.Save(settings);
+    }
+
     private void SaveWindowBounds()
     {
         var settings = AppSettingsStore.Load();
@@ -111,6 +300,7 @@ public partial class MainWindow : Window
     private void OnWindowClosing(object? sender, CancelEventArgs e)
     {
         SaveWindowBounds(); // 记住关闭时的窗口大小/最大化状态，下次启动恢复
+        SaveSidebarWidth();
 
         if (DataContext is not MainWindowViewModel viewModel || viewModel.Document is null)
         {
@@ -602,11 +792,29 @@ public partial class MainWindow : Window
     }
 
     /// <summary>折叠/展开左侧缩略图与书签栏。</summary>
+
     private void OnSidebarToggleClick(object sender, RoutedEventArgs e)
     {
         var collapsed = SidebarColumn.Width.IsAbsolute && SidebarColumn.Width.Value < 1;
-        SidebarColumn.Width = collapsed ? new GridLength(220) : new GridLength(0);
-        SidebarColumn.MinWidth = collapsed ? 160 : 0;
+        if (collapsed)
+        {
+            var width = Math.Clamp(_lastSidebarWidth, SidebarMinWidth, SidebarMaxWidth);
+            SidebarColumn.MinWidth = SidebarMinWidth;
+            SidebarColumn.MaxWidth = SidebarMaxWidth;
+            SidebarColumn.Width = new GridLength(width);
+        }
+        else
+        {
+            if (SidebarColumn.ActualWidth > 1)
+            {
+                _lastSidebarWidth = SidebarColumn.ActualWidth;
+            }
+
+            SidebarColumn.MinWidth = 0;
+            SidebarColumn.MaxWidth = 0;
+            SidebarColumn.Width = new GridLength(0);
+        }
+
         SidebarToggleIcon.Data = collapsed
             ? Geometry.Parse("M 5 3 L 10 10 L 5 17")
             : Geometry.Parse("M 8 3 L 3 10 L 8 17");
@@ -674,6 +882,36 @@ public partial class MainWindow : Window
     }
 
     /// <summary>缩略图列表滚轮：一次滚动半页视口高度，避免速度过快。</summary>
+    /// <summary>Ctrl+滚轮缩放侧栏内容，普通滚轮仍由内部列表滚动。</summary>
+    private void OnSidebarPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Control)
+            || SidebarColumn.ActualWidth <= 1)
+        {
+            return;
+        }
+
+        var scale = Math.Clamp(_sidebarScaleTransform.ScaleX + Math.Sign(e.Delta) * 0.1, 0.7, 1.8);
+        _sidebarScaleTransform.ScaleX = scale;
+        _sidebarScaleTransform.ScaleY = scale;
+        e.Handled = true;
+    }
+
+    /// <summary>拖动侧栏分隔条调整宽度。</summary>
+    private void OnSidebarSplitterDragDelta(object sender, DragDeltaEventArgs e)
+    {
+        if (SidebarColumn.ActualWidth <= 1)
+        {
+            return;
+        }
+
+        var width = Math.Clamp(SidebarColumn.ActualWidth + e.HorizontalChange, SidebarMinWidth, SidebarMaxWidth);
+        SidebarColumn.MinWidth = SidebarMinWidth;
+        SidebarColumn.MaxWidth = SidebarMaxWidth;
+        SidebarColumn.Width = new GridLength(width);
+        _lastSidebarWidth = width;
+    }
+
     private void OnThumbnailListPreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
         if (FindVisualChild<ScrollViewer>(ThumbnailList) is not ScrollViewer scrollViewer)
@@ -712,6 +950,11 @@ public partial class MainWindow : Window
 
     private void OnBookmarkSelectionChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
+        if (_isBookmarkSyncing)
+        {
+            return;
+        }
+
         if (e.NewValue is BookmarkViewModel bookmark && bookmark.CanNavigate)
         {
             Canvas.GoToPage(bookmark.PageIndex);

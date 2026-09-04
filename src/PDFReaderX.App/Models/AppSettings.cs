@@ -18,6 +18,9 @@ public sealed class AppSettings
     /// <summary>上次关闭时窗口是否最大化。</summary>
     public bool WindowMaximized { get; set; }
 
+    /// <summary>侧栏宽度；null 表示按默认值初始化。</summary>
+    public double? SidebarWidth { get; set; }
+
     /// <summary>性能模式：降低渲染清晰度上限与缓存页数，适合配置较低的电脑。</summary>
     public bool PerformanceMode { get; set; }
 
