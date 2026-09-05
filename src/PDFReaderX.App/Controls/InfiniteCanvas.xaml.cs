@@ -327,7 +327,6 @@ public partial class InfiniteCanvas : UserControl
         {
             CurrentPageIndex = index;
             CurrentPageChanged?.Invoke(this, index);
-            MarkModified();
         }
     }
 
@@ -591,7 +590,7 @@ public partial class InfiniteCanvas : UserControl
     /// <summary>平移总量 = 手动平移 + 文档居中偏移，统一各调用点。</summary>
     private void UpdatePanTransform()
     {
-        MarkModified();
+        // 平移/翻页只改变阅读视口，不属于内容修改；避免关闭时误弹“未保存”。
         PanTransform.X = _pan.X + _docOffsetX;
         PanTransform.Y = _pan.Y;
     }

@@ -1,12 +1,30 @@
-﻿<Window x:Class="PDFReaderX.App.SettingsWindow"
+<Window x:Class="PDFReaderX.App.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="设置" Height="480" Width="600"
-        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" ResizeMode="NoResize">
+        Title="设置" Height="560" Width="700"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        ResizeMode="CanResize" MinWidth="620" MinHeight="500"
+        UseLayoutRounding="True">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="#FF1F1F1F"/>
+        </Style>
+        <Style x:Key="HelpText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="#FF666666"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="LineHeight" Value="18"/>
+        </Style>
+        <Style x:Key="PrimaryButton" TargetType="Button">
+            <Setter Property="Padding" Value="14,6"/>
+            <Setter Property="MinWidth" Value="92"/>
+        </Style>
     </Window.Resources>
-    <Grid Margin="12">
+
+    <Grid Margin="18">
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
@@ -14,128 +32,203 @@
 
         <TabControl>
             <TabItem Header="LLM 设置">
-                <StackPanel>
-                    <TextBlock Text="使用 AI 书签前需先配置：API Key 可在阿里云百炼控制台（bailian.console.aliyun.com）申请，模型建议用 qwen 系列（文本 + 视觉）。"
-                               Foreground="#FFC77700" TextWrapping="Wrap" Margin="4,6,4,0"/>
-                    <Grid x:Name="LlmPanel" Margin="8">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="4,12,8,8">
+                        <Border Background="#FFFFF7E6" BorderBrush="#FFE6C469" BorderThickness="1"
+                                CornerRadius="6" Padding="12,9" Margin="0,0,0,14">
+                            <TextBlock Style="{StaticResource HelpText}" Foreground="#FF9A6700"
+                                       Text="使用 AI 书签前需先配置。API Key 可在阿里云百炼控制台申请，建议使用 qwen 系列文本与视觉模型。"/>
+                        </Border>
 
-                    <TextBlock Text="API 地址:" Grid.Row="0" Grid.Column="0" VerticalAlignment="Center"/>
-                    <TextBox Grid.Row="0" Grid.Column="1" Margin="8,6"
-                             Text="{Binding Endpoint, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="OpenAI 兼容接口地址，例如 https://dashscope.aliyuncs.com/compatible-mode/v1"/>
+                        <Grid x:Name="LlmPanel" Margin="0,0,0,12">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="86"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
 
-                    <TextBlock Text="API Key:" Grid.Row="1" Grid.Column="0" VerticalAlignment="Center"/>
-                    <PasswordBox x:Name="ApiKeyBox" Grid.Row="1" Grid.Column="1" Margin="8,6"
-                                 ToolTip="调用大模型的密钥，仅保存在本机"/>
+                            <TextBlock Text="API 地址" Grid.Row="0" Grid.Column="0" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" Margin="12,5,0,5"
+                                     Text="{Binding Endpoint, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="OpenAI 兼容接口地址，例如 https://dashscope.aliyuncs.com/compatible-mode/v1"/>
 
-                    <TextBlock Text="模型:" Grid.Row="2" Grid.Column="0" VerticalAlignment="Center"/>
-                    <TextBox x:Name="ModelBox" Grid.Row="2" Grid.Column="1" Margin="8,6"
-                             Text="{Binding Model, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="文本模型，用于可提取文字的 PDF"/>
-                    <TextBlock Text="视觉模型:" Grid.Row="3" Grid.Column="0" VerticalAlignment="Center"/>
-                    <TextBox Grid.Row="3" Grid.Column="1" Margin="8,6"
-                             Text="{Binding VisionModel, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="扫描版 PDF（无文字层）时，渲染页面图片交给视觉模型识别生成书签"/>
+                            <TextBlock Text="API Key" Grid.Row="1" Grid.Column="0" VerticalAlignment="Center"/>
+                            <PasswordBox x:Name="ApiKeyBox" Grid.Row="1" Grid.Column="1" Margin="12,5,0,5"
+                                         ToolTip="调用大模型的密钥，仅保存在本机"/>
 
-                    <CheckBox Grid.Row="4" Grid.ColumnSpan="2" Margin="8,6,8,0" Content="使用视觉模式前不再询问"
-                              IsChecked="{Binding SkipVisionConfirm}"/>
-                    <TextBlock Grid.Row="5" Grid.ColumnSpan="2" Margin="8,2,8,0"
-                               Text="设置保存在 %AppData%\PDFReaderX\llm-settings.json，不会进入项目仓库。"
-                               Foreground="Gray" FontSize="11"/>
+                            <TextBlock Text="文本模型" Grid.Row="2" Grid.Column="0" VerticalAlignment="Center"/>
+                            <TextBox x:Name="ModelBox" Grid.Row="2" Grid.Column="1" Margin="12,5,0,5"
+                                     Text="{Binding Model, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="用于可提取文字的 PDF"/>
 
-                    <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Orientation="Horizontal"
-                                HorizontalAlignment="Right" Margin="0,12,0,0">
-                        <TextBlock x:Name="SaveStatusText" Foreground="#FF1E8E3E" FontSize="11"
-                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <Button Content="保存" Width="80" Margin="4" Click="OnLlmSaveClick"/>
-                        <Button Content="取消" Width="80" Margin="4" IsCancel="True"/>
+                            <TextBlock Text="视觉模型" Grid.Row="3" Grid.Column="0" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="3" Grid.Column="1" Margin="12,5,0,5"
+                                     Text="{Binding VisionModel, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="扫描版 PDF（无文字层）时，渲染页面图片交给视觉模型识别生成书签"/>
+
+                            <CheckBox Grid.Row="4" Grid.ColumnSpan="2" Margin="0,10,0,0"
+                                      Content="使用视觉模式前不再询问"
+                                      IsChecked="{Binding SkipVisionConfirm}"/>
+
+                            <TextBlock Grid.Row="5" Grid.ColumnSpan="2" Margin="0,10,0,0"
+                                       Style="{StaticResource HelpText}"
+                                       Text="LLM 设置保存在 %AppData%\PDFReaderX\llm-settings.json，不会进入项目仓库。"/>
+
+                            <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Orientation="Horizontal"
+                                        HorizontalAlignment="Right" Margin="0,16,0,0">
+                                <TextBlock x:Name="SaveStatusText" Foreground="#FF1E8E3E" FontSize="12"
+                                           VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <Button Content="保存" Style="{StaticResource PrimaryButton}" Margin="4,0,0,0" Click="OnLlmSaveClick"/>
+                                <Button Content="取消" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0" IsCancel="True"/>
+                            </StackPanel>
+                        </Grid>
                     </StackPanel>
-                </Grid>
-                </StackPanel>
+                </ScrollViewer>
             </TabItem>
 
             <TabItem Header="书签">
-                <StackPanel Margin="12">
-                    <TextBlock Text="AI 重新生成书签" FontWeight="Bold" FontSize="14"/>
-                    <TextBlock Text="已有书签或想换一批目录时，可让 AI 重新阅读 PDF 生成书签。生成过程会在下方显示进度。"
-                               Foreground="Gray" TextWrapping="Wrap" Margin="0,6,0,12"/>
-                    <StackPanel Margin="0,2" HorizontalAlignment="Stretch"
-                                Visibility="{Binding IsGeneratingBookmarks, Converter={StaticResource BoolToVis}}">
-                        <ProgressBar IsIndeterminate="True" Height="4"/>
-                        <TextBlock Text="{Binding BookmarkGenerationStatus}" FontSize="11"
-                                   Foreground="#FF555555" HorizontalAlignment="Center"
-                                   Margin="0,4,0,2" TextWrapping="Wrap"/>
-                    </StackPanel>
-                    <Button Content="AI 重新生成书签" Command="{Binding GenerateBookmarksCommand}"
-                            HorizontalAlignment="Stretch" Margin="0,8,0,0" Padding="0,6"
-                            ToolTip="用大模型重新阅读 PDF 内容，生成新的书签目录"/>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="4,12,8,8">
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="AI 重新生成书签"/>
+                        <TextBlock Style="{StaticResource HelpText}" Margin="0,6,0,14"
+                                   Text="已有书签或想换一批目录时，可让 AI 重新阅读 PDF 生成书签。生成过程会在下方显示进度。"/>
 
-                    <Separator Margin="0,16"/>
-                    <TextBlock Text="页码微调" FontWeight="Bold" FontSize="14"/>
-                    <TextBlock Text="书签与实际内容整体偏移 1 页时，可手动把所有书签的目标页整体上移或下移 1 页。调整后保存文档才会写入文件。"
-                               Foreground="Gray" TextWrapping="Wrap" Margin="0,6,0,10"/>
-                    <StackPanel Orientation="Horizontal">
-                        <Button Content="整体下移 1 页" Command="{Binding ShiftBookmarksDownCommand}"
-                                Margin="0,0,8,0" Padding="10,6"
-                                ToolTip="所有书签目标页 +1"/>
-                        <Button Content="整体上移 1 页" Command="{Binding ShiftBookmarksUpCommand}"
-                                Padding="10,6"
-                                ToolTip="所有书签目标页 -1"/>
+                        <StackPanel Margin="0,2" HorizontalAlignment="Stretch"
+                                    Visibility="{Binding IsGeneratingBookmarks, Converter={StaticResource BoolToVis}}">
+                            <ProgressBar IsIndeterminate="True" Height="4"/>
+                            <TextBlock Text="{Binding BookmarkGenerationStatus}" FontSize="12"
+                                       Foreground="#FF555555" HorizontalAlignment="Center"
+                                       Margin="0,8,0,2" TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <Button Content="AI 重新生成书签" Command="{Binding GenerateBookmarksCommand}"
+                                HorizontalAlignment="Stretch" Margin="0,4,0,0" Padding="0,8"
+                                ToolTip="用大模型重新阅读 PDF 内容，生成新的书签目录"/>
+
+                        <Separator Margin="0,20"/>
+
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="页码微调"/>
+                        <TextBlock Style="{StaticResource HelpText}" Margin="0,6,0,12"
+                                   Text="书签与实际内容整体偏移 1 页时，可把所有书签的目标页整体上移或下移 1 页。调整后保存文档才会写入文件。"/>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="整体下移 1 页" Command="{Binding ShiftBookmarksDownCommand}"
+                                    Margin="0,0,10,0" Padding="14,8"
+                                    ToolTip="所有书签目标页 +1"/>
+                            <Button Content="整体上移 1 页" Command="{Binding ShiftBookmarksUpCommand}"
+                                    Padding="14,8"
+                                    ToolTip="所有书签目标页 -1"/>
+                        </StackPanel>
                     </StackPanel>
-                </StackPanel>
+                </ScrollViewer>
             </TabItem>
 
             <TabItem Header="通用">
-                <StackPanel Margin="12">
-                    <TextBlock Text="画布操作" FontWeight="Bold" FontSize="14"/>
-                    <TextBlock Text="• 鼠标滚轮：上下滚动页面" Margin="0,6,0,0"/>
-                    <TextBlock Text="• Shift + 滚轮：左右滚动" Margin="0,2,0,0"/>
-                    <TextBlock Text="• Ctrl + 滚轮：以鼠标位置为中心缩放" Margin="0,2,0,0"/>
-                    <TextBlock Text="• 选择工具或鼠标中键拖动：平移画布" Margin="0,2,0,0"/>
-                    <TextBlock Text="• 触摸：单指平移，双指缩放" Margin="0,2,0,0"/>
-                    <TextBlock Text="• 钢笔/荧光笔/橡皮擦：可在页面及页面外的白色画布区域使用" Margin="0,2,0,0"/>
-                    <Separator Margin="0,12"/>
-                    <TextBlock Text="文本框边框" FontWeight="Bold" FontSize="14"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                        <TextBlock Text="输入框边框款式:" VerticalAlignment="Center"/>
-                        <ComboBox Width="140" Margin="8,0,0,0"
-                                  ItemsSource="{Binding TextBorderStyles}"
-                                  SelectedValuePath="Key" DisplayMemberPath="Name"
-                                  SelectedValue="{Binding TextBorderStyle}"
-                                  ToolTip="选择后立即生效，作用于之后新建的文本框"/>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="4,12,8,8">
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="画布操作"/>
+                        <StackPanel Margin="0,8,0,0">
+                            <TextBlock Style="{StaticResource HelpText}" Text="• 鼠标滚轮：上下滚动页面"/>
+                            <TextBlock Style="{StaticResource HelpText}" Margin="0,3,0,0" Text="• Shift + 滚轮：左右滚动"/>
+                            <TextBlock Style="{StaticResource HelpText}" Margin="0,3,0,0" Text="• Ctrl + 滚轮：以鼠标位置为中心缩放"/>
+                            <TextBlock Style="{StaticResource HelpText}" Margin="0,3,0,0" Text="• 选择工具或鼠标中键拖动：平移画布"/>
+                            <TextBlock Style="{StaticResource HelpText}" Margin="0,3,0,0" Text="• 触摸：单指平移，双指缩放"/>
+                            <TextBlock Style="{StaticResource HelpText}" Margin="0,3,0,0" Text="• 钢笔/荧光笔/橡皮擦：可在页面及页面外的白色画布区域使用"/>
+                        </StackPanel>
+
+                        <Separator Margin="0,18"/>
+
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="文本框边框"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <TextBlock Text="输入框边框款式" VerticalAlignment="Center"/>
+                            <ComboBox Width="150" Margin="12,0,0,0"
+                                      ItemsSource="{Binding TextBorderStyles}"
+                                      SelectedValuePath="Key" DisplayMemberPath="Name"
+                                      SelectedValue="{Binding TextBorderStyle}"
+                                      ToolTip="选择后立即生效，作用于之后新建的文本框"/>
+                        </StackPanel>
+
+                        <Separator Margin="0,18"/>
+
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="性能"/>
+                        <CheckBox Content="性能模式（适合配置较低的电脑）" Margin="0,10,0,0"
+                                  IsChecked="{Binding PerformanceMode}"
+                                  ToolTip="开启后降低页面渲染清晰度上限与缓存页数，滚动、缩放更流畅"/>
+                        <TextBlock Style="{StaticResource HelpText}" Margin="0,6,0,0"
+                                   Text="降低页面渲染清晰度上限与缓存页数，滚动、缩放更流畅；放大后文字会略模糊。切换后立即生效。"/>
+
+                        <Separator Margin="0,18"/>
+
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="数据与存储"/>
+                        <TextBlock Style="{StaticResource HelpText}" Margin="0,8,0,0"
+                                   Text="LLM 设置保存在 %AppData%\PDFReaderX\llm-settings.json，不会进入项目仓库。"/>
+                        <TextBlock Style="{StaticResource HelpText}" Margin="0,4,0,0"
+                                   Text="只翻页、未修改批注和书签时，关闭会自动记住阅读位置，不会弹窗询问。"/>
                     </StackPanel>
-                    <Separator Margin="0,12"/>
-                    <TextBlock Text="性能" FontWeight="Bold" FontSize="14"/>
-                    <CheckBox Content="性能模式（适合配置较低的电脑）" Margin="0,6,0,0"
-                              IsChecked="{Binding PerformanceMode}"
-                              ToolTip="开启后降低页面渲染清晰度上限与缓存页数，滚动、缩放更流畅"/>
-                    <TextBlock Text="降低页面渲染清晰度上限与缓存页数，滚动、缩放更流畅；放大后文字会略模糊。切换后立即生效。"
-                               Foreground="Gray" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                    <Separator Margin="0,12"/>
-                    <TextBlock Text="数据与存储" FontWeight="Bold" FontSize="14"/>
-                    <TextBlock Text="LLM 设置保存在 %AppData%\PDFReaderX\llm-settings.json，不会进入项目仓库。"
-                               Foreground="Gray" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                    <TextBlock Text="自由画布墨迹与页面批注仅在当前会话中保留，关闭文档后清除。"
-                               Foreground="Gray" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="更新">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="4,12,8,8">
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="应用更新"/>
+                        <TextBlock Style="{StaticResource HelpText}" Margin="0,6,0,16"
+                                   Text="从 GitHub Releases 检查最新版本，下载官方安装包并启动自动更新。"/>
+
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="发布地址" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center"
+                                       Style="{StaticResource HelpText}" Foreground="#FF2D6CDF"
+                                       Text="https://github.com/yeguoyy/PDFReader-X"/>
+                        </Grid>
+
+                        <Grid Margin="0,0,0,16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="当前版本" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="CurrentVersionText" Grid.Column="1" Margin="12,0,0,0"
+                                       VerticalAlignment="Center" FontWeight="Bold"/>
+                        </Grid>
+
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="CheckUpdateButton" Content="重新检查"
+                                    Style="{StaticResource PrimaryButton}" Padding="18,8"
+                                    Click="OnCheckUpdateClick"/>
+                            <Button x:Name="OneClickUpdateButton" Content="一键更新"
+                                    Style="{StaticResource PrimaryButton}" Padding="18,8"
+                                    Margin="10,0,0,0" Visibility="Collapsed"
+                                    Click="OnOneClickUpdateClick"/>
+                            <Button x:Name="OpenReleasePageButton" Content="打开发布页"
+                                    Style="{StaticResource PrimaryButton}" Padding="18,8"
+                                    Margin="10,0,0,0" Click="OnOpenReleasePageClick"/>
+                        </StackPanel>
+
+                        <ProgressBar x:Name="UpdateProgressBar" Height="6" Minimum="0" Maximum="100"
+                                     Value="0" Margin="0,18,0,0" Visibility="Collapsed"/>
+                        <TextBlock x:Name="UpdateStatusText" Style="{StaticResource HelpText}"
+                                   Margin="0,8,0,0" Text="尚未检查更新。"/>
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
         </TabControl>
 
-        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-            <Button Content="关闭" Width="80" IsCancel="True" Margin="4"/>
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button Content="关闭" Width="88" IsCancel="True" Style="{StaticResource PrimaryButton}"/>
         </StackPanel>
     </Grid>
 </Window>
+
+

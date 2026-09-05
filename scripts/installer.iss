@@ -1,8 +1,8 @@
-﻿; PDFReaderX 安装包脚本（Inno Setup 6）
+; PDFReaderX 安装包脚本（Inno Setup 6）
 ; 用法: 安装 Inno Setup 6 后运行 scripts\publish.ps1 dist
 
 #define MyAppName "PDFReader X"
-#define MyAppVersion "1.0.3"
+#define MyAppVersion "1.0.4"
 #define MyAppExeName "PDFReaderX.App.exe"
 #define MyAppPublisher "PDFReaderX"
 
@@ -42,5 +42,6 @@ Root: HKCU; Subkey: "Software\Classes\PDFReaderX.Pdfrx\shell\open\command"; Valu
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
 
 

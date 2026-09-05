@@ -19,6 +19,8 @@ public partial class MainWindow : Window
     private bool _thumbnailListHover;
     private bool _bookmarksDirty;
     private bool _isBookmarkSyncing;
+    private bool _readingPositionDirty;
+    private bool _isSavingReadingPosition;
     private const double SidebarMinWidth = 160;
     private const double SidebarMaxWidth = 450;
     private double _lastSidebarWidth = 220;
@@ -73,6 +75,7 @@ public partial class MainWindow : Window
         }
 
         viewModel.CurrentPageIndex = pageIndex;
+        _readingPositionDirty = true;
         if (!_thumbnailListHover)
         {
             var thumbnail = viewModel.Thumbnails.FirstOrDefault(t => t.PageIndex == pageIndex);
@@ -314,6 +317,12 @@ public partial class MainWindow : Window
 
         if (!Canvas.IsModified && !_bookmarksDirty)
         {
+            // 只有阅读位置变化时静默保存，不打断关闭流程。
+            if (_readingPositionDirty && !_isSavingReadingPosition)
+            {
+                e.Cancel = true;
+                SaveReadingPositionOnExitAsync(viewModel);
+            }
             return;
         }
 
@@ -332,6 +341,45 @@ public partial class MainWindow : Window
         // 保存并退出：先取消本次关闭，异步保存并显示进度，完成后真正退出
         e.Cancel = true;
         SaveOnExitAsync(viewModel);
+    }
+
+    private async void SaveReadingPositionOnExitAsync(MainWindowViewModel viewModel)
+    {
+        if (viewModel.Document is not { } document)
+        {
+            return;
+        }
+
+        _isSavingReadingPosition = true;
+        try
+        {
+            if (!string.IsNullOrEmpty(viewModel.CurrentPdfrxPath))
+            {
+                await PdfrxStore.SaveAsync(
+                    viewModel.CurrentPdfrxPath, Canvas, document, viewModel.Bookmarks,
+                    embedPdf: false);
+            }
+            else
+            {
+                await Task.Run(() => SessionStore.Save(Canvas, document, viewModel.Bookmarks));
+            }
+        }
+        catch (Exception ex)
+        {
+            LogExitSaveError(ex);
+            MessageBox.Show(
+                $"自动保存阅读位置失败：\n{ex.Message}\n\n仍将关闭应用。",
+                "PDFReader X",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        finally
+        {
+            _readingPositionDirty = false;
+            _isSavingReadingPosition = false;
+            _isExitingWithSave = true;
+            Close();
+        }
     }
 
     private async void SaveOnExitAsync(MainWindowViewModel viewModel)
@@ -417,6 +465,7 @@ public partial class MainWindow : Window
     {
         Canvas.ResetModified();
         _bookmarksDirty = false;
+        _readingPositionDirty = false;
     }
 
     /// <summary>点击 "+"：打开新建笔对话框。</summary>
@@ -681,6 +730,9 @@ public partial class MainWindow : Window
         {
             viewModel.StatusText = "批注文档已恢复";
         }
+
+        // 画布恢复完成后再开始跟踪本次会话的阅读位置变化。
+        _readingPositionDirty = false;
     }
 
     private async void OnSavePdfrxClick(object sender, RoutedEventArgs e)

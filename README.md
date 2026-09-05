@@ -2,7 +2,7 @@
 
 > OneNote 风格的 PDF 阅读与手写批注工具 · WPF / .NET 8
 
-![版本](https://img.shields.io/badge/版本-v1.0.3-2D6CDF?style=flat-square)
+![版本](https://img.shields.io/badge/版本-v1.0.4-2D6CDF?style=flat-square)
 ![框架](https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square)
 ![平台](https://img.shields.io/badge/平台-Windows%2010%2F11%20x64-0078D6?style=flat-square)
 
@@ -54,8 +54,8 @@
 
 从 [GitHub Releases](https://github.com/yeguoyy/PDFReader-X/releases) 获取：
 
-- `PDFReaderX-win-x64-1.0.3.zip` —— 免安装，解压即用
-- `PDFReaderX-Setup-1.0.3.exe` —— 安装包
+- `PDFReaderX-win-x64-1.0.4.zip` —— 免安装，解压即用
+- `PDFReaderX-Setup-1.0.4.exe` —— 安装包
 
 > 自包含单文件，无需额外安装 .NET 运行时。
 
@@ -130,7 +130,7 @@ PDFReaderX.App.exe "文档.pdf"
 # 免安装单文件包：dist/PDFReaderX-win-x64.zip
 .\scripts\publish.ps1 pack
 
-# 安装包：dist/installer/PDFReaderX-Setup-1.0.3.exe（需先安装 Inno Setup 6）
+# 安装包：dist/installer/PDFReaderX-Setup-1.0.4.exe（需先安装 Inno Setup 6）
 .\scripts\publish.ps1 dist
 ```
 
@@ -150,7 +150,7 @@ PDFReaderX.sln
 
 ## 📝 更新日志
 
-### v1.0.3
+### v1.0.4
 
 - 修复 `.pdfrx` 保存后子级书签丢失的问题
 - 增强 AI 书签响应解析兼容性，减少异常 JSON 导致生成失败
@@ -207,3 +207,5 @@ dotnet test
 ```
 
 覆盖 PDF 加载、按 DPI 渲染、文本提取、书签目录、缩略图渲染、LLM 书签 JSON 解析、坐标变换等。
+
+
